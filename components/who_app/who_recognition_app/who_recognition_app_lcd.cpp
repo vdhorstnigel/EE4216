@@ -73,7 +73,8 @@ WhoRecognitionAppLCD::~WhoRecognitionAppLCD()
 
 bool WhoRecognitionAppLCD::run()
 {
-    bool ret = WhoYield2Idle::get_instance()->run();
+    // Increase Yield2Idle stack to avoid overflow when monitoring/pausing tasks on busy frames
+    bool ret = WhoYield2Idle::get_instance()->run(3072);
     for (const auto &frame_cap_node : m_frame_cap->get_all_nodes()) {
         ret &= frame_cap_node->run(4096, 2, 0);
     }

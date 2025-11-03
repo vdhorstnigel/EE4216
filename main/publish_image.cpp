@@ -4,9 +4,9 @@
 #include <string>
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "mbedtls/base64.h"
-
-#include "mqtt5.h"
 #include "who_detect.hpp"
 #include "dl_image_define.hpp"
 #include "dl_image_jpeg.hpp"
@@ -49,40 +49,5 @@ static std::string base64_encode(const uint8_t *data, size_t len)
     }
     out[olen] = '\0';
     std::string result((char *)out, olen);
-    free(out);
     return result;
-}
-
-void mqtt5_publish_detection(const who::detect::WhoDetect::result_t &result)
-{
-    using namespace dl::image;
-
-    if (result.img.data == nullptr || result.img.width == 0 || result.img.height == 0) {
-        ESP_LOGW(TAG_IMG, "No image to publish");
-        return;
-    }
-
-    // Encode to JPEG (software implementation; works for RGB565/RGB888/GRAY)
-    uint32_t caps = 0; // assume little-endian RGB565 or RGB888 in RGB order
-    jpeg_img_t jpeg = sw_encode_jpeg(result.img, caps, 80);
-
-    if (jpeg.data == nullptr || jpeg.data_len == 0) {
-        ESP_LOGE(TAG_IMG, "JPEG encode failed");
-        return;
-    }
-
-    // Base64 encode
-    std::string b64 = base64_encode(reinterpret_cast<const uint8_t *>(jpeg.data), jpeg.data_len);
-    if (b64.empty()) {
-        ESP_LOGE(TAG_IMG, "Base64 encode failed");
-        // Free JPEG buffer if allocated by encoder
-        free(jpeg.data);
-        return;
-    }
-
-    // Publish
-    mqtt5_publish_payload_c(MQTT_Detection_topic, b64.c_str());
-
-    // Free JPEG buffer (dl::image::sw_encode_jpeg allocates a buffer)
-    free(jpeg.data);
 }

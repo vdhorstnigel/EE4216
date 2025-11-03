@@ -9,7 +9,8 @@ WhoRecognitionButton::WhoRecognitionButton(task::WhoTask *task)
     m_btn_user_data = new btn_user_data_t[3];
     m_btn_user_data[0] = {task, recognition::WhoRecognitionCore::RECOGNIZE};
     m_btn_user_data[1] = {task, recognition::WhoRecognitionCore::ENROLL};
-    m_btn_user_data[2] = {task, recognition::WhoRecognitionCore::DELETE};
+    // Map delete button to clear-all instead of delete-last
+    m_btn_user_data[2] = {task, recognition::WhoRecognitionCore::CLEAR_ALL};
 }
 
 WhoRecognitionButton::~WhoRecognitionButton()
@@ -70,7 +71,7 @@ WhoRecognitionButtonLVGL::WhoRecognitionButtonLVGL(recognition::WhoRecognitionCo
     bsp_display_lock(0);
     m_btn_recognize = create_lvgl_btn("recognize", &montserrat_bold_26);
     m_btn_enroll = create_lvgl_btn("enroll", &montserrat_bold_26);
-    m_btn_delete = create_lvgl_btn("delete", &montserrat_bold_26);
+    m_btn_delete = create_lvgl_btn("delete all", &montserrat_bold_26);
     lv_obj_add_event_cb(m_btn_recognize, btn_event_handler, LV_EVENT_CLICKED, (void *)m_btn_user_data);
     lv_obj_add_event_cb(m_btn_enroll, btn_event_handler, LV_EVENT_CLICKED, (void *)(m_btn_user_data + 1));
     lv_obj_add_event_cb(m_btn_delete, btn_event_handler, LV_EVENT_CLICKED, (void *)(m_btn_user_data + 2));

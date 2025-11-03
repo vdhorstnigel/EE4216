@@ -8,7 +8,8 @@ class WhoRecognitionCore : public task::WhoTask {
 public:
     static inline constexpr EventBits_t RECOGNIZE = TASK_EVENT_BIT_LAST;
     static inline constexpr EventBits_t ENROLL = TASK_EVENT_BIT_LAST << 1;
-    static inline constexpr EventBits_t DELETE = TASK_EVENT_BIT_LAST << 2;
+    static inline constexpr EventBits_t DELETE = TASK_EVENT_BIT_LAST << 2; // delete last
+    static inline constexpr EventBits_t CLEAR_ALL = TASK_EVENT_BIT_LAST << 3; // delete all faces
 
     WhoRecognitionCore(const std::string &name, detect::WhoDetect *detect);
     ~WhoRecognitionCore();

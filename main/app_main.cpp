@@ -3,9 +3,10 @@
 #include "who_recognition_app_term.hpp"
 #include "who_spiflash_fatfs.hpp"
 #include "wifi_connect.c"
-#include "http_streamer.c"
+#include "http_streamer.h"
 #include "MyRecognitionApp.hpp"
-#include "mqtt5.h"
+#include "recognition_control.h"
+#include "esp_wifi.h"
 
 using namespace who::frame_cap;
 using namespace who::app;
@@ -28,6 +29,8 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(bsp_led_set(BSP_LED_GREEN, false));
 #endif
 
+    static const char *TAG = "app_main";
+
     ESP_LOGI(TAG, "[APP] Startup..");
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
@@ -37,6 +40,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     wifi_init();
+    esp_wifi_set_ps(WIFI_PS_NONE);
     start_webserver();
 #if CONFIG_IDF_TARGET_ESP32S3
     auto frame_cap = get_dvp_frame_cap_pipeline();
@@ -46,4 +50,6 @@ extern "C" void app_main(void)
 #endif
     auto recognition_app = new MyRecognitionApp(frame_cap);
     recognition_app->run();
+    // Register recognition event group for HTTP action control buttons
+    recognition_register_event_group(recognition_app->get_recognition_event_group());
 }

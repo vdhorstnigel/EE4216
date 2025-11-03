@@ -46,8 +46,11 @@ bool WhoRecognitionCore::run(const configSTACK_DEPTH_TYPE uxStackDepth,
 void WhoRecognitionCore::task()
 {
     while (true) {
-        EventBits_t event_bits = xEventGroupWaitBits(
-            m_event_group, RECOGNIZE | ENROLL | DELETE | TASK_PAUSE | TASK_STOP, pdTRUE, pdFALSE, portMAX_DELAY);
+        EventBits_t event_bits = xEventGroupWaitBits(m_event_group,
+                                                     RECOGNIZE | ENROLL | DELETE | CLEAR_ALL | TASK_PAUSE | TASK_STOP,
+                                                     pdTRUE,
+                                                     pdFALSE,
+                                                     portMAX_DELAY);
         if (event_bits & TASK_STOP) {
             break;
         } else if (event_bits & TASK_PAUSE) {
@@ -103,6 +106,16 @@ void WhoRecognitionCore::task()
                     m_recognition_result_cb("Failed to delete.");
                 } else {
                     m_recognition_result_cb(std::format("id: {} deleted.", m_recognizer->get_num_feats() + 1));
+                }
+            }
+        }
+        if (event_bits & CLEAR_ALL) {
+            esp_err_t ret = m_recognizer->clear_all_feats();
+            if (m_recognition_result_cb) {
+                if (ret == ESP_FAIL) {
+                    m_recognition_result_cb("Failed to delete all.");
+                } else {
+                    m_recognition_result_cb("all faces deleted.");
                 }
             }
         }

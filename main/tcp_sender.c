@@ -1,6 +1,8 @@
 #include "lwip/sockets.h"
 #include "esp_camera.h"
 #include "esp_log.h"
+#include "img_converters.h"
+#include <string.h>
 
 static const char *TAG = "tcp_sender";
 
@@ -14,12 +16,60 @@ bool send_jpeg_over_tcp(const char *ip, uint16_t port) {
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) { close(sock); return false; }
 
-    uint32_t len = htonl(fb->len);
-    if (send(sock, &len, sizeof(len), 0) < 0) { esp_camera_fb_return(fb); close(sock); return false; }
-    if (send(sock, fb->buf, fb->len, 0) < 0)  { esp_camera_fb_return(fb); close(sock); return false; }
+    const uint8_t *send_buf = fb->buf;
+    size_t send_len = fb->len;
+    uint8_t *conv_buf = NULL;
 
+    if (fb->format != PIXFORMAT_JPEG) {
+        // Convert to JPEG
+        if (!frame2jpg(fb, 70, &conv_buf, &send_len) || !conv_buf) {
+            esp_camera_fb_return(fb);
+            close(sock);
+            ESP_LOGE(TAG, "JPEG conversion failed");
+            return false;
+        }
+        send_buf = conv_buf;
+    }
+
+    uint32_t net_len = htonl((uint32_t)send_len);
+    bool ok = (send(sock, &net_len, sizeof(net_len), 0) >= 0) && (send(sock, send_buf, send_len, 0) >= 0);
+
+    if (conv_buf) free(conv_buf);
     esp_camera_fb_return(fb);
     close(sock);
-    ESP_LOGI(TAG, "JPEG sent");
-    return true;
+    if (ok) ESP_LOGI(TAG, "JPEG sent (%u bytes)", (unsigned)send_len);
+    return ok;
+}
+
+// Send an RGB565 image buffer as JPEG over TCP
+bool send_rgb565_image_over_tcp(const uint8_t *rgb565,
+                                uint16_t width,
+                                uint16_t height,
+                                const char *ip,
+                                uint16_t port,
+                                uint8_t quality)
+{
+    if (!rgb565 || width == 0 || height == 0) return false;
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return false;
+    struct sockaddr_in dest = {.sin_family=AF_INET, .sin_port=htons(port)};
+    inet_pton(AF_INET, ip, &dest.sin_addr);
+    if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) != 0) { close(sock); return false; }
+
+    uint8_t *jpg_buf = NULL;
+    size_t jpg_len = 0;
+    size_t src_len = (size_t)width * height * 2;
+    bool ok = fmt2jpg((uint8_t *)rgb565, src_len, width, height, PIXFORMAT_RGB565, quality, &jpg_buf, &jpg_len);
+    if (!ok || !jpg_buf) {
+        close(sock);
+        ESP_LOGE(TAG, "fmt2jpg failed");
+        return false;
+    }
+
+    uint32_t net_len = htonl((uint32_t)jpg_len);
+    ok = (send(sock, &net_len, sizeof(net_len), 0) >= 0) && (send(sock, jpg_buf, jpg_len, 0) >= 0);
+    free(jpg_buf);
+    close(sock);
+    if (ok) ESP_LOGI(TAG, "RGB565->JPEG sent (%u bytes)", (unsigned)jpg_len);
+    return ok;
 }

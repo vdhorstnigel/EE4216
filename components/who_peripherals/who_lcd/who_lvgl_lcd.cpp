@@ -10,7 +10,8 @@ void WhoLCD::init(const lvgl_port_cfg_t &lvgl_port_cfg)
     esp_lcd_panel_io_handle_t io_handle = NULL;
     esp_lcd_panel_handle_t panel_handle = NULL;
     const bsp_display_config_t bsp_disp_cfg = {
-        .max_transfer_sz = BSP_LCD_H_RES * BSP_LCD_V_RES * sizeof(uint16_t),
+        // Keep SPI transfers small to avoid long blocking flushes and DMA queue errors
+        .max_transfer_sz = 4 * 1024,
     };
     ESP_ERROR_CHECK(bsp_display_new(&bsp_disp_cfg, &panel_handle, &io_handle));
     esp_lcd_panel_disp_on_off(panel_handle, true);
@@ -24,10 +25,10 @@ void WhoLCD::init(const lvgl_port_cfg_t &lvgl_port_cfg)
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = io_handle,
         .panel_handle = panel_handle,
-        // Use smaller partial buffer to avoid long blocking flushes
-        .buffer_size = BSP_LCD_H_RES * 40, // ~40 lines tile
-        .double_buffer = false,
-        .trans_size = 8 * 1024, // use SRAM bounce buffer for PSRAM sources
+    // Use smaller partial buffer to avoid long blocking flushes
+    .buffer_size = BSP_LCD_H_RES * 16, // ~16 lines tile
+    .double_buffer = true,             // allow alternating buffers while flushing
+    .trans_size = 8 * 1024,            // fewer segments per tile to reduce IO queue pressure
         .hres = BSP_LCD_H_RES,
         .vres = BSP_LCD_V_RES,
         .monochrome = false,
@@ -39,8 +40,8 @@ void WhoLCD::init(const lvgl_port_cfg_t &lvgl_port_cfg)
                 .mirror_y = mirror_y,
             },
         .flags = {
-            .buff_dma = true,
-            .buff_spiram = true,
+            .buff_dma = false,      // disable direct DMA from draw buffers in PSRAM
+            .buff_spiram = true,    // allocate draw buffers in PSRAM
 #if LVGL_VERSION_MAJOR >= 9
             .swap_bytes = false,
 #endif
