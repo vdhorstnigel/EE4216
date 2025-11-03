@@ -28,17 +28,26 @@ public:
 protected:
     // Recognition result from core
     void recognition_result_cb(const std::string &result) override {
-        // keep LCD behavior
-        who::app::WhoRecognitionAppLCD::recognition_result_cb(result);
+        // Optional LCD overlay (disabled by default to avoid SPI errors while streaming)
+        if (kUseLCD) {
+            who::app::WhoRecognitionAppLCD::recognition_result_cb(result);
+        }
         // allow next trigger
         m_recognition_pending = false;
         ESP_LOGI("Recognition", "%s", result.c_str());
+        if (result.find("id: ") != std::string::npos) {
+            ESP_LOGI("Recognition", "Recognized face, resetting detection state.");
+            m_detection_active = false;
+            m_detection_start_tick = 0;
+        }
     }
 
     // Detection results (bounding boxes, etc.)
     void detect_result_cb(const who::detect::WhoDetect::result_t &result) override {
-        // keep LCD overlay behavior
-        who::app::WhoRecognitionAppLCD::detect_result_cb(result);
+        // Optional LCD overlay (disabled by default to avoid SPI errors while streaming)
+        if (kUseLCD) {
+            who::app::WhoRecognitionAppLCD::detect_result_cb(result);
+        }
 
         TickType_t now = xTaskGetTickCount();
         if (!result.det_res.empty()) {
@@ -47,8 +56,8 @@ protected:
                 m_detection_start_tick = now;
             }
             m_last_detection_tick = now;
-            // If detection sustained for >= 5s and recognition not pending, trigger recognition once
-            const TickType_t five_sec = pdMS_TO_TICKS(5000);
+            // If detection sustained for >= 2s
+            const TickType_t five_sec = pdMS_TO_TICKS(2000);
             if (!m_recognition_pending && (now - m_detection_start_tick >= five_sec)) {
                 auto *rec_task = m_recognition->get_recognition_task();
                 if (rec_task && rec_task->is_active()) {
@@ -58,7 +67,7 @@ protected:
             }
         } else {
             // No detections in this frame; if it stays quiet for a short while, reset state
-            const TickType_t quiet_ms = pdMS_TO_TICKS(500);
+            const TickType_t quiet_ms = pdMS_TO_TICKS(300);
             if (m_detection_active && (now - m_last_detection_tick > quiet_ms)) {
                 m_detection_active = false;
                 m_detection_start_tick = 0;
@@ -76,6 +85,8 @@ protected:
     }
 
 private:
+    // Toggle LCD drawing (off by default to avoid SPI bus errors during HTTP streaming)
+    static constexpr bool kUseLCD = false;
     bool m_recognition_pending;
     bool m_detection_active;
     TickType_t m_detection_start_tick;
@@ -102,12 +113,10 @@ extern "C" bool send_rgb565_image_over_tcp(const uint8_t *rgb565,
 
 inline void MyRecognitionApp::motion_task()
 {
-    const TickType_t period = pdMS_TO_TICKS(10000); // every 10 seconds
-    const TickType_t active_window = pdMS_TO_TICKS(3000); // consider detection active if within last 3s
     for (;;) {
-        vTaskDelay(period);
-        TickType_t now = xTaskGetTickCount();
-        if (m_detection_active && (now - m_last_detection_tick <= active_window)) {
+        // Send every 10 seconds while detection is active
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        if (m_detection_active) {
             // Get latest frame from the capture pipeline
             auto last_node = m_frame_cap->get_last_node();
             if (last_node) {

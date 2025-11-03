@@ -18,17 +18,25 @@ static const char *INDEX_HTML =
     "<!doctype html><html><head><meta name=viewport content='width=device-width, initial-scale=1'/>"
     "<title>ESP Stream</title>"
     "<style>body{font-family:sans-serif;margin:0;padding:0}header{padding:8px;background:#222;color:#fff}"
-    "main{padding:8px}img{max-width:100%;height:auto;border:1px solid #ccc}button{margin:6px;padding:8px 12px}"
+    "main{padding:8px}iframe#vid{width:100%;height:60vh;border:1px solid #ccc}button{margin:6px;padding:8px 12px}"
     "#bar{position:fixed;bottom:0;left:0;right:0;background:#f5f5f5;padding:8px;border-top:1px solid #ddd}"
     "</style></head><body>"
     "<header><h3>ESP Camera Stream</h3></header><main>"
-    "<img id=vid src='/stream' alt='stream'/>"
+    "<iframe id='vid' src='/stream' frameborder='0'></iframe>"
     "</main><div id=bar>"
-    "<button onclick=go('recognize')>Recognize</button>"
     "<button onclick=go('enroll')>Enroll</button>"
     "<button onclick=go('clear')>Delete All</button>"
     "<span id=msg style='margin-left:12px;color:#555'></span>"
-    "</div><script>function go(cmd){fetch('/action?cmd='+cmd).then(r=>r.text()).then(t=>msg.textContent=t).catch(e=>msg.textContent='err')}</script>"
+    "</div><script>"
+    "const msgEl=document.getElementById('msg');"
+    "function go(cmd){"
+    "  msgEl.textContent='sending...';"
+    "  fetch('/action?cmd='+cmd,{cache:'no-store'})"
+    "    .then(r=>r.text())"
+    "    .then(t=>{msgEl.textContent=t;})"
+    "    .catch(e=>{msgEl.textContent='error';});"
+    "}"
+    "</script>"
     "</body></html>";
 
 static esp_err_t snapshot_get_handler(httpd_req_t *req) {
@@ -152,6 +160,8 @@ static esp_err_t action_get_handler(httpd_req_t *req) {
     if (qlen > sizeof(query)) qlen = sizeof(query);
     if (httpd_req_get_url_query_str(req, query, qlen) == ESP_OK &&
         httpd_query_key_value(query, "cmd", cmd, sizeof(cmd)) == ESP_OK) {
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
         if (strcmp(cmd, "recognize") == 0) {
             recognition_request_recognize();
             httpd_resp_sendstr(req, "recognize: OK");
@@ -166,6 +176,8 @@ static esp_err_t action_get_handler(httpd_req_t *req) {
             return ESP_OK;
         }
     }
-    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad cmd");
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "usage: /action?cmd=enroll|clear");
     return ESP_OK;
 }

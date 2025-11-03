@@ -1,20 +1,29 @@
 #include "lwip/sockets.h"
+#include "lwip/inet.h"
 #include "esp_camera.h"
 #include "esp_log.h"
 #include "img_converters.h"
 #include <string.h>
+#include <errno.h>
 
 static const char *TAG = "tcp_sender";
 
 bool send_jpeg_over_tcp(const char *ip, uint16_t port) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) return false;
+    if (sock < 0) {
+        ESP_LOGE(TAG, "socket() failed: errno=%d", errno);
+        return false;
+    }
     struct sockaddr_in dest = {.sin_family=AF_INET, .sin_port=htons(port)};
     inet_pton(AF_INET, ip, &dest.sin_addr);
-    if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) != 0) { close(sock); return false; }
+    if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) != 0) {
+        ESP_LOGE(TAG, "connect(%s:%u) failed: errno=%d", ip, (unsigned)port, errno);
+        close(sock);
+        return false;
+    }
 
     camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) { close(sock); return false; }
+    if (!fb) { ESP_LOGE(TAG, "esp_camera_fb_get failed"); close(sock); return false; }
 
     const uint8_t *send_buf = fb->buf;
     size_t send_len = fb->len;
@@ -32,7 +41,15 @@ bool send_jpeg_over_tcp(const char *ip, uint16_t port) {
     }
 
     uint32_t net_len = htonl((uint32_t)send_len);
-    bool ok = (send(sock, &net_len, sizeof(net_len), 0) >= 0) && (send(sock, send_buf, send_len, 0) >= 0);
+    ssize_t n1 = send(sock, &net_len, sizeof(net_len), 0);
+    ssize_t n2 = -1;
+    if (n1 == sizeof(net_len)) {
+        n2 = send(sock, send_buf, send_len, 0);
+    }
+    bool ok = (n1 == sizeof(net_len) && n2 == (ssize_t)send_len);
+    if (!ok) {
+        ESP_LOGE(TAG, "send failed: n1=%d n2=%d errno=%d", (int)n1, (int)n2, errno);
+    }
 
     if (conv_buf) free(conv_buf);
     esp_camera_fb_return(fb);
@@ -51,10 +68,14 @@ bool send_rgb565_image_over_tcp(const uint8_t *rgb565,
 {
     if (!rgb565 || width == 0 || height == 0) return false;
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) return false;
+    if (sock < 0) { ESP_LOGE(TAG, "socket() failed: errno=%d", errno); return false; }
     struct sockaddr_in dest = {.sin_family=AF_INET, .sin_port=htons(port)};
     inet_pton(AF_INET, ip, &dest.sin_addr);
-    if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) != 0) { close(sock); return false; }
+    if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) != 0) {
+        ESP_LOGE(TAG, "connect(%s:%u) failed: errno=%d", ip, (unsigned)port, errno);
+        close(sock);
+        return false;
+    }
 
     uint8_t *jpg_buf = NULL;
     size_t jpg_len = 0;
@@ -67,7 +88,15 @@ bool send_rgb565_image_over_tcp(const uint8_t *rgb565,
     }
 
     uint32_t net_len = htonl((uint32_t)jpg_len);
-    ok = (send(sock, &net_len, sizeof(net_len), 0) >= 0) && (send(sock, jpg_buf, jpg_len, 0) >= 0);
+    ssize_t m1 = send(sock, &net_len, sizeof(net_len), 0);
+    ssize_t m2 = -1;
+    if (m1 == sizeof(net_len)) {
+        m2 = send(sock, jpg_buf, jpg_len, 0);
+    }
+    ok = (m1 == sizeof(net_len) && m2 == (ssize_t)jpg_len);
+    if (!ok) {
+        ESP_LOGE(TAG, "send failed: m1=%d m2=%d errno=%d", (int)m1, (int)m2, errno);
+    }
     free(jpg_buf);
     close(sock);
     if (ok) ESP_LOGI(TAG, "RGB565->JPEG sent (%u bytes)", (unsigned)jpg_len);
