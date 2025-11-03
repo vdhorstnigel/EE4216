@@ -1,0 +1,10 @@
+build/
+
+sdkconfig
+sdkconfig.old
+
+.vscode/
+
+managed_components/
+
+.clangd
