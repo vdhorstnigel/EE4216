@@ -10,15 +10,7 @@
 #include "lwip/sys.h" //system applications for light weight ip apps
 #include <stdbool.h>
 #include "esp_eap_client.h"
-
-const char* ssid = "gremlin5";
-const char* password =  "0123456789";
-
-const char* NUS_ssid = "NUS_STU";
-const char* NUS_identity = "e0959043";  
-const char* NUS_username = "e0959043";  
-const char* NUS_password = "Password1234@";
-
+#include "credentials.c"
 
 static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id,void *event_data){
 const char *TAG = "wifi_init";

@@ -5,6 +5,7 @@
 #include "wifi_connect.c"
 #include "http_streamer.c"
 #include "MyRecognitionApp.hpp"
+#include "mqtt5.h"
 
 using namespace who::frame_cap;
 using namespace who::app;

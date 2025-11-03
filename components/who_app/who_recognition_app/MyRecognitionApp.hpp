@@ -1,6 +1,8 @@
 #pragma once
 #include "who_recognition_app_lcd.hpp"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "mqtt5.h"
 
 class MyRecognitionApp : public who::app::WhoRecognitionAppLCD {
 public:
@@ -13,20 +15,21 @@ protected:
         // keep LCD behavior
         who::app::WhoRecognitionAppLCD::recognition_result_cb(result);
         // add console log
-        ESP_LOGI("MyRecognition", "%s", result.c_str());
+        //ESP_LOGI("Recognition", "%s", result.c_str());
     }
 
     // Detection results (bounding boxes, scores, timestamp, image ref)
     void detect_result_cb(const who::detect::WhoDetect::result_t& result) override {
         // keep LCD overlay behavior
         who::app::WhoRecognitionAppLCD::detect_result_cb(result);
-        // add console log
-        ESP_LOGI("MyDetection", "ts=%ld.%06ld, detections=%d",
-                 (long)result.timestamp.tv_sec, (long)result.timestamp.tv_usec,
-                 (int)result.det_res.size());
-        // Optional: iterate detections if you want more detail.
-        // Note: structure of dl::detect::result_t depends on model; log fields you need here.
-        // for (const auto& d : result.det_res) { ... }
+
+        vTaskDelay(pdMS_TO_TICKS(200)); // check detection every 200ms
+        if ((int)result.det_res.size() > 0) {
+           mqtt5_publish_detection(result);
+        }
+        else {
+            ESP_LOGI("Detection", "No detections.");
+        }
     }
 
     void recognition_cleanup() override {

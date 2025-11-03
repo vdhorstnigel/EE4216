@@ -24,8 +24,10 @@ void WhoLCD::init(const lvgl_port_cfg_t &lvgl_port_cfg)
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = io_handle,
         .panel_handle = panel_handle,
-        .buffer_size = BSP_LCD_DRAW_BUFF_SIZE,
-        .double_buffer = BSP_LCD_DRAW_BUFF_DOUBLE,
+        // Use smaller partial buffer to avoid long blocking flushes
+        .buffer_size = BSP_LCD_H_RES * 40, // ~40 lines tile
+        .double_buffer = false,
+        .trans_size = 8 * 1024, // use SRAM bounce buffer for PSRAM sources
         .hres = BSP_LCD_H_RES,
         .vres = BSP_LCD_V_RES,
         .monochrome = false,
@@ -38,10 +40,12 @@ void WhoLCD::init(const lvgl_port_cfg_t &lvgl_port_cfg)
             },
         .flags = {
             .buff_dma = true,
-            .buff_spiram = false,
+            .buff_spiram = true,
 #if LVGL_VERSION_MAJOR >= 9
             .swap_bytes = false,
 #endif
+            .full_refresh = false,
+            .direct_mode = false,
         }};
     m_disp = lvgl_port_add_disp(&disp_cfg);
     ESP_ERROR_CHECK(bsp_display_backlight_on());
