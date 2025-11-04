@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 
+extern "C" bool http_streaming_active(void);
 
 extern "C" bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
                                                uint16_t width,
@@ -37,8 +38,8 @@ public:
 protected:
     // Recognition result from core
     void recognition_result_cb(const std::string &result) override {
-        // Optional LCD overlay (disabled by default to avoid SPI errors while streaming)
-        if (kUseLCD) {
+        // Optional LCD overlay (enabled only when not streaming to avoid SPI/CPU contention)
+        if (lcd_enabled()) {
             who::app::WhoRecognitionAppLCD::recognition_result_cb(result);
         }
         // allow next trigger
@@ -53,12 +54,12 @@ protected:
 
     // Detection results (bounding boxes, etc.)
     void detect_result_cb(const who::detect::WhoDetect::result_t &result) override {
-        // Optional LCD overlay (disabled by default to avoid SPI errors while streaming)
-        if (kUseLCD) {
+        // Optional LCD overlay (enabled only when not streaming to avoid SPI/CPU contention)
+        if (lcd_enabled()) {
             who::app::WhoRecognitionAppLCD::detect_result_cb(result);
         }
         const TickType_t one_sec = pdMS_TO_TICKS(1000);
-        const TickType_t min_send_interval = pdMS_TO_TICKS(10000); // 10s cooldown between motion snapshots
+        const TickType_t min_send_interval = pdMS_TO_TICKS(10000); // cooldown between motion snapshots
         TickType_t now = xTaskGetTickCount();
         if (!result.det_res.empty()) {
             if (!m_detection_active) {
@@ -66,7 +67,18 @@ protected:
                 m_detection_start_tick = now;
             }
             m_last_detection_tick = now;
-            if (now - m_last_send_tick >= min_send_interval) {
+            // If detection sustained for >= 1s, trigger recognition first
+            if (!m_recognition_pending && (now - m_detection_start_tick >= one_sec)) {
+                auto *rec_task = m_recognition->get_recognition_task();
+                if (rec_task && rec_task->is_active()) {
+                    xEventGroupSetBits(rec_task->get_event_group(), who::recognition::WhoRecognitionCore::RECOGNIZE);
+                    m_recognition_pending = true;
+                }
+            }
+            // Block snapshots while recognition is pending OR while detection is sustained (>=1s)
+            const bool recognition_window = m_recognition_pending || ((now - m_detection_start_tick) >= one_sec);
+            // Only consider snapshot outside recognition window and when cooldown elapsed
+            if (!recognition_window && (now - m_last_send_tick >= min_send_interval)) {
                 auto last_node = m_frame_cap->get_last_node();
                 if (last_node) {
                     who::cam::cam_fb_t *fb = last_node->cam_fb_peek(-1);
@@ -89,13 +101,12 @@ protected:
                                 ctx->quality = 40;
                                 strncpy(ctx->caption, "Motion Detected", sizeof(ctx->caption) - 1);
                                 ctx->caption[sizeof(ctx->caption) - 1] = '\0';
-                                // Create a detached task with a larger stack (~16 KB -> 4096 words)
                                 const uint32_t stack_words = 4096;
                                 BaseType_t ok = xTaskCreatePinnedToCore(&MyRecognitionApp::MotionSendTask,
                                                                         "MotionSend",
                                                                         stack_words,
                                                                         (void *)ctx,
-                                                                        tskIDLE_PRIORITY + 2,
+                                                                        tskIDLE_PRIORITY, // keep lowest priority so detection/recognition win
                                                                         nullptr,
                                                                         0);
                                 if (ok != pdPASS) {
@@ -115,14 +126,7 @@ protected:
                     }
                 }
             }
-            // If detection sustained for >= 1s
-            if (!m_recognition_pending && (now - m_detection_start_tick >= one_sec)) {
-                auto *rec_task = m_recognition->get_recognition_task();
-                if (rec_task && rec_task->is_active()) {
-                    xEventGroupSetBits(rec_task->get_event_group(), who::recognition::WhoRecognitionCore::RECOGNIZE);
-                    m_recognition_pending = true;
-                }
-            }
+            // (recognition gating handled above)
         } else {
             // No detections in this frame; if it stays quiet for a short while, reset state
             const TickType_t quiet_ms = pdMS_TO_TICKS(300);
@@ -143,6 +147,10 @@ protected:
     }
 
 private:
+    // Decide dynamically if LCD overlays should be enabled
+    static inline bool lcd_enabled() {
+        return !http_streaming_active();
+    }
     // Context and task to send snapshot without using Detect task stack
     struct MotionSendCtx {
         uint8_t *rgb565;
@@ -156,6 +164,8 @@ private:
     static void MotionSendTask(void *arg) {
         MotionSendCtx *ctx = (MotionSendCtx *)arg;
         if (ctx) {
+            // Yield once so critical tasks can run
+            vTaskDelay(1);
             ESP_LOGI("MotionSend", "Sending snapshot to Telegram (%ux%u)", ctx->width, ctx->height);
             (void)send_rgb565_image_to_telegram(ctx->rgb565, ctx->width, ctx->height, ctx->quality, ctx->caption);
             free(ctx->rgb565);
@@ -164,8 +174,7 @@ private:
         vTaskDelete(nullptr);
     }
 
-    // Toggle LCD drawing (off by default to avoid SPI bus errors during HTTP streaming)
-    static constexpr bool kUseLCD = false;
+    // LCD drawing is dynamically gated via lcd_enabled()
     bool m_recognition_pending;
     bool m_detection_active;
     TickType_t m_detection_start_tick;

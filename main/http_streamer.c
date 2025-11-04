@@ -13,6 +13,13 @@ static const char *TAG = "http_stream";
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=frame";
 static const char *_STREAM_BOUNDARY = "\r\n--frame\r\n";
 static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
+// Track if a client is currently connected to /stream
+static volatile bool s_streaming_active = false;
+
+bool http_streaming_active(void) {
+    return s_streaming_active;
+}
+
 
 static const char *INDEX_HTML =
     "<!doctype html><html><head><meta name=viewport content='width=device-width, initial-scale=1'/>"
@@ -79,6 +86,7 @@ static esp_err_t stream_get_handler(httpd_req_t *req) {
     char part_buf[64];
     httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
     ESP_LOGI(TAG, "stream: client connected");
+    s_streaming_active = true;
     while (true) {
         camera_fb_t *fb = esp_camera_fb_get();
         if (!fb) {
@@ -126,6 +134,7 @@ static esp_err_t stream_get_handler(httpd_req_t *req) {
     // Terminate the response
     httpd_resp_send_chunk(req, NULL, 0);
     ESP_LOGI(TAG, "stream: client disconnected");
+    s_streaming_active = false;
     return ESP_OK;
 }
 
