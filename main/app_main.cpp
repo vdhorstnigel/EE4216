@@ -6,7 +6,6 @@
 #include "http_streamer.h"
 #include "MyRecognitionApp.hpp"
 #include "recognition_control.h"
-#include "esp_wifi.h"
 
 using namespace who::frame_cap;
 using namespace who::app;
@@ -40,7 +39,6 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     wifi_init();
-    esp_wifi_set_ps(WIFI_PS_NONE);
     start_webserver();
 #if CONFIG_IDF_TARGET_ESP32S3
     auto frame_cap = get_dvp_frame_cap_pipeline();

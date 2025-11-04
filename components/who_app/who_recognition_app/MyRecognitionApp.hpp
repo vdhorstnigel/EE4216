@@ -40,6 +40,7 @@ protected:
             m_detection_active = false;
             m_detection_start_tick = 0;
         }
+        vtaskDelay(pdMS_TO_TICKS(100)); // Give time for other functions to run
     }
 
     // Detection results (bounding boxes, etc.)
@@ -93,7 +94,7 @@ private:
     TickType_t m_last_detection_tick;
     TaskHandle_t m_motion_task;
 
-    // Change to your TCP receiver
+    // TCP receiver settings
     static constexpr const char *MOTION_TCP_IP = "192.168.0.10";
     static constexpr uint16_t MOTION_TCP_PORT = 5050;
 
@@ -114,7 +115,7 @@ extern "C" bool send_rgb565_image_over_tcp(const uint8_t *rgb565,
 inline void MyRecognitionApp::motion_task()
 {
     for (;;) {
-        // Send every 10 seconds while detection is active
+        // Send every t seconds while detection is active
         vTaskDelay(pdMS_TO_TICKS(5000));
         if (m_detection_active) {
             // Get latest frame from the capture pipeline
