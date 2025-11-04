@@ -16,11 +16,13 @@ public:
           m_detection_start_tick(0),
           m_last_detection_tick(0),
           m_motion_task(nullptr),
-          m_sending_telegram(false)
+                    m_sending_telegram(false),
+                    m_last_send_tick(0)
     {
         // Start periodic motion photo sender task
-        // HTTPS + JPEG conversion needs a larger stack; use 9 KB
-        xTaskCreatePinnedToCore(&MyRecognitionApp::motion_task_thunk, "MotionPhoto", 9216, this, 2, &m_motion_task, tskNO_AFFINITY);
+                // HTTPS + JPEG conversion needs a larger stack; use 9 KB
+                // Pin to CPU0 with low priority to avoid starving detection (which runs on CPU1)
+                xTaskCreatePinnedToCore(&MyRecognitionApp::motion_task_thunk, "MotionPhoto", 9216, this, 0, &m_motion_task, 0);
     }
 
     // Expose recognition event group for web control
@@ -37,9 +39,9 @@ protected:
         }
         // allow next trigger
         m_recognition_pending = false;
-        ESP_LOGI("Recognition", "%s", result.c_str());
+    // Suppress verbose recognition logs in production
         if (result.find("id: ") != std::string::npos) {
-            ESP_LOGI("Recognition", "Recognized face, resetting detection state.");
+                // Reset detection state after recognition
             m_detection_active = false;
             m_detection_start_tick = 0;
         }
@@ -48,6 +50,7 @@ protected:
     // Detection results (bounding boxes, etc.)
     void detect_result_cb(const who::detect::WhoDetect::result_t &result) {
         // Draw overlay only if not sending a Telegram photo to avoid SPI queue issues
+        ESP_LOGI("Detection", "Detection callback received with %d results", result.det_res.size());
         if (!m_sending_telegram) {
             who::app::WhoRecognitionAppLCD::detect_result_cb(result);
         }
@@ -94,6 +97,7 @@ private:
     TickType_t m_last_detection_tick;
     TaskHandle_t m_motion_task;
     volatile bool m_sending_telegram;
+    TickType_t m_last_send_tick;
 
     // Telegram caption (optional)
     static constexpr const char *MOTION_CAPTION = "Motion snapshot";
@@ -116,20 +120,23 @@ inline void MyRecognitionApp::motion_task()
     for (;;) {
         // Check every 5 seconds; if detection is active, send snapshot
         vTaskDelay(pdMS_TO_TICKS(5000));
-        if (m_detection_active) {
+        // Enforce a minimum interval between sends to reduce CPU/network load
+        const TickType_t min_interval = pdMS_TO_TICKS(20000); // 20s
+        TickType_t now = xTaskGetTickCount();
+        if (m_detection_active && (now - m_last_send_tick >= min_interval)) {
             // Get latest frame from the capture pipeline
             auto last_node = m_frame_cap->get_last_node();
             if (last_node) {
-                UBaseType_t wm = uxTaskGetStackHighWaterMark(nullptr);
-                ESP_LOGI("MotionPhoto", "Motion detected, sending photo to Telegram... (stack HWM: %u words)", (unsigned)wm);
+                // Motion detected; send photo silently (no verbose logs)
                 who::cam::cam_fb_t *fb = last_node->cam_fb_peek(-1);
                 if (fb && fb->buf && fb->width && fb->height) {
                     bool ok = false;
                     m_sending_telegram = true;
                     g_sending_telegram = true;
                     if (fb->format == who::cam::cam_fb_fmt_t::CAM_FB_FMT_RGB565) {
+                        // Lower quality value to reduce encode time and upload size
                         ok = send_rgb565_image_to_telegram((const uint8_t *)fb->buf, fb->width, fb->height,
-                                                            60, MOTION_CAPTION);
+                                                            35, MOTION_CAPTION);
                     } else if (fb->format == who::cam::cam_fb_fmt_t::CAM_FB_FMT_JPEG) {
                         // Not expected in current pipeline, but handle generically by sending already-JPEG camera frame
                         // We can add a helper if needed; for now, skip as it requires length management
@@ -138,10 +145,9 @@ inline void MyRecognitionApp::motion_task()
                     m_sending_telegram = false;
                     g_sending_telegram = false;
                     if (ok) {
-                        ESP_LOGI("MotionPhoto", "Photo sent to Telegram");
-                    } else {
-                        ESP_LOGW("MotionPhoto", "Failed to send photo");
+                        m_last_send_tick = now;
                     }
+                    (void)ok; // silent on success; optionally handle failure
                 }
             }
         }

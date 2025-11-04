@@ -7,7 +7,8 @@ const char* NUS_username = "e0959043";
 const char* NUS_password = "Password1234@";
 
 const char* Telegram_Bot_Token = "8508403841:AAHozwJTKtDI7qsZwpI2k4GbfD3dntZ3T5U";
-const char* Telegram_Chat_ID = "-1";
+const char* Telegram_Chat_ID = "-1003208366727";
+const char* Telegram_Relay_URL = "";
 
 
 const char *MQTT_Broker = "mqtts://e29d378a.ala.asia-southeast1.emqxsl.com:8883";

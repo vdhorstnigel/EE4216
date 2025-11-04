@@ -8,13 +8,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include "lwip/sockets.h"
+#include "lwip/netdb.h"
+#include "lwip/inet.h"
 
 static const char *TAG = "telegram_sender";
 
-
+// Credentials and optional pinned certificate from credentials.c
 extern const char *Telegram_Bot_Token;
 extern const char *Telegram_Chat_ID;
 extern const char *telegram_cert;
+extern const char *Telegram_Relay_URL;
+/* Debug probes removed for production build */
+
+
+// (moved externs to top of file)
 
 // Helper to write all bytes
 static bool http_write_all(esp_http_client_handle_t client, const void *buf, int len) {
@@ -70,57 +78,17 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
 
     size_t content_length = (size_t)part1_len + (size_t)part2_hdr_len + jpg_len + (size_t)part3_cap_len + (size_t)closing_len;
 
-    esp_http_client_config_t cfg = {
-        .url = url,
-        // Prefer using the IDF certificate bundle to avoid pinning and expiry issues
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 30000,
-        .transport_type = HTTP_TRANSPORT_OVER_SSL,
-        .keep_alive_enable = false,
-        .buffer_size_tx = 4096,
-        .buffer_size = 4096,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) { ESP_LOGE(TAG, "http_client_init failed"); return false; }
-
+    // Prefer pinned certificate first as requested; fallback to IDF bundle if needed
+    esp_http_client_handle_t client = NULL;
     char ctype[96];
     snprintf(ctype, sizeof(ctype), "multipart/form-data; boundary=%s", boundary);
-    esp_http_client_set_method(client, HTTP_METHOD_POST);
-    esp_http_client_set_header(client, "Content-Type", ctype);
-    // Explicit Host header for SNI and some CDNs
-    esp_http_client_set_header(client, "Host", "api.telegram.org");
-    esp_http_client_set_header(client, "User-Agent", "esp-idf-telegram/1.0");
 
-    // Wait briefly for SNTP time to be set so TLS validation is reliable
-    {
-        const time_t cutoff = 1609459200; // 2021-01-01
-        const uint32_t max_wait_ms = 10000;
-        uint32_t waited = 0;
-        while (time(NULL) < cutoff && waited < max_wait_ms) {
-            vTaskDelay(pdMS_TO_TICKS(250));
-            waited += 250;
-        }
-        if (waited >= max_wait_ms) {
-            ESP_LOGW(TAG, "Time not synced yet; attempting TLS anyway");
-        }
-    }
-
-    // Try a few times with small backoff to ride over transient network hiccups
-    const int max_attempts = 3;
     esp_err_t err = ESP_FAIL;
-    for (int attempt = 1; attempt <= max_attempts; ++attempt) {
-        err = esp_http_client_open(client, content_length);
-        if (err == ESP_OK) break;
-        ESP_LOGW(TAG, "http_open attempt %d/%d failed: %s", attempt, max_attempts, esp_err_to_name(err));
-        vTaskDelay(pdMS_TO_TICKS(500 * attempt));
-    }
-    if (err != ESP_OK) {
-        // Fallback: retry with pinned certificate provided in credentials
-        ESP_LOGW(TAG, "Falling back to pinned telegram_cert");
-        esp_http_client_close(client);
-        esp_http_client_cleanup(client);
+    const int max_attempts = 3;
 
-        esp_http_client_config_t cfg2 = {
+    // 1) Try pinned cert
+    {
+        esp_http_client_config_t cfg_pinned = {
             .url = url,
             .cert_pem = telegram_cert,
             .timeout_ms = 30000,
@@ -129,24 +97,152 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
             .buffer_size_tx = 4096,
             .buffer_size = 4096,
         };
-        client = esp_http_client_init(&cfg2);
-        if (!client) { ESP_LOGE(TAG, "http_client_init (fallback) failed"); return false; }
+        client = esp_http_client_init(&cfg_pinned);
+        if (client) {
+            esp_http_client_set_method(client, HTTP_METHOD_POST);
+            esp_http_client_set_header(client, "Content-Type", ctype);
+            esp_http_client_set_header(client, "User-Agent", "esp-idf-telegram/1.0");
+
+            // Wait briefly for SNTP time to be set so TLS validation is reliable
+            {
+                const time_t cutoff = 1609459200; // 2021-01-01
+                const uint32_t max_wait_ms = 10000;
+                uint32_t waited = 0;
+                while (time(NULL) < cutoff && waited < max_wait_ms) {
+                    vTaskDelay(pdMS_TO_TICKS(250));
+                    waited += 250;
+                }
+                if (waited >= max_wait_ms) {
+                    ESP_LOGW(TAG, "Time not synced yet; attempting TLS anyway");
+                }
+            }
+
+            for (int attempt = 1; attempt <= max_attempts; ++attempt) {
+                err = esp_http_client_open(client, content_length);
+                if (err == ESP_OK) break;
+                ESP_LOGD(TAG, "http_open (pinned) attempt %d/%d failed: %s", attempt, max_attempts, esp_err_to_name(err));
+                vTaskDelay(pdMS_TO_TICKS(500 * attempt));
+            }
+            if (err != ESP_OK) {
+                esp_http_client_close(client);
+                esp_http_client_cleanup(client);
+                client = NULL;
+                // Probes removed in production build
+            }
+        }
+    }
+
+    // 2) If pinned failed, try IDF certificate bundle
+    if (!client) {
+        ESP_LOGD(TAG, "Falling back to ESP-IDF certificate bundle");
+        esp_http_client_config_t cfg_bundle = {
+            .url = url,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .timeout_ms = 30000,
+            .transport_type = HTTP_TRANSPORT_OVER_SSL,
+            .keep_alive_enable = false,
+            .buffer_size_tx = 4096,
+            .buffer_size = 4096,
+        };
+        client = esp_http_client_init(&cfg_bundle);
+        if (!client) { ESP_LOGE(TAG, "http_client_init (bundle) failed"); return false; }
         esp_http_client_set_method(client, HTTP_METHOD_POST);
         esp_http_client_set_header(client, "Content-Type", ctype);
-        esp_http_client_set_header(client, "Host", "api.telegram.org");
         esp_http_client_set_header(client, "User-Agent", "esp-idf-telegram/1.0");
 
         for (int attempt = 1; attempt <= max_attempts; ++attempt) {
             err = esp_http_client_open(client, content_length);
             if (err == ESP_OK) break;
-            ESP_LOGW(TAG, "http_open(fallback) attempt %d/%d failed: %s", attempt, max_attempts, esp_err_to_name(err));
+            ESP_LOGD(TAG, "http_open (bundle) attempt %d/%d failed: %s", attempt, max_attempts, esp_err_to_name(err));
             vTaskDelay(pdMS_TO_TICKS(500 * attempt));
         }
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "http_open failed even with pinned cert: %s", esp_err_to_name(err));
+            ESP_LOGE(TAG, "http_open failed with bundle: %s", esp_err_to_name(err));
+            esp_http_client_cleanup(client);
+            // Probes removed in production build
+            client = NULL;
+        }
+    }
+
+    // 3) If both Telegram paths failed and a relay URL is configured, try relay
+    if (!client && Telegram_Relay_URL && Telegram_Relay_URL[0]) {
+        ESP_LOGW(TAG, "Attempting relay POST: %s", Telegram_Relay_URL);
+        esp_http_client_config_t cfg_relay = {
+            .url = Telegram_Relay_URL,
+            .timeout_ms = 30000,
+            .transport_type = HTTP_TRANSPORT_OVER_SSL,
+            .keep_alive_enable = false,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .buffer_size_tx = 4096,
+            .buffer_size = 4096,
+        };
+        client = esp_http_client_init(&cfg_relay);
+        if (!client) {
+            ESP_LOGE(TAG, "http_client_init (relay) failed");
+            return false;
+        }
+        esp_http_client_set_method(client, HTTP_METHOD_POST);
+        // Build a multipart similar to Telegram: token, chat_id, caption, photo
+        const char *rel_boundary = "------------------------relay7e139713";
+        char rel_ctype[96];
+        snprintf(rel_ctype, sizeof rel_ctype, "multipart/form-data; boundary=%s", rel_boundary);
+        esp_http_client_set_header(client, "Content-Type", rel_ctype);
+
+        char r1[256];
+        int r1_len = snprintf(r1, sizeof r1,
+            "--%s\r\nContent-Disposition: form-data; name=\"token\"\r\n\r\n%s\r\n",
+            rel_boundary, Telegram_Bot_Token ? Telegram_Bot_Token : "");
+        char r2[256];
+        int r2_len = snprintf(r2, sizeof r2,
+            "--%s\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n%s\r\n",
+            rel_boundary, Telegram_Chat_ID ? Telegram_Chat_ID : "");
+        char r3_hdr[256];
+        int r3_hdr_len = snprintf(r3_hdr, sizeof r3_hdr,
+            "--%s\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"photo.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n",
+            rel_boundary);
+        char r4_cap[256];
+        int r4_cap_len = 0;
+        if (caption && caption[0]) {
+            r4_cap_len = snprintf(r4_cap, sizeof r4_cap,
+                "\r\n--%s\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n%s",
+                rel_boundary, caption);
+        }
+        char r_end[64];
+        int r_end_len = snprintf(r_end, sizeof r_end, "\r\n--%s--\r\n", rel_boundary);
+        size_t rel_len = (size_t)r1_len + r2_len + r3_hdr_len + jpg_len + (size_t)r4_cap_len + (size_t)r_end_len;
+
+        esp_err_t err_r = esp_http_client_open(client, rel_len);
+        if (err_r != ESP_OK) {
+            ESP_LOGE(TAG, "relay http_open failed: %s", esp_err_to_name(err_r));
             esp_http_client_cleanup(client);
             return false;
         }
+        bool okr = http_write_all(client, r1, r1_len)
+                && http_write_all(client, r2, r2_len)
+                && http_write_all(client, r3_hdr, r3_hdr_len)
+                && http_write_all(client, jpg, (int)jpg_len);
+        if (okr && r4_cap_len > 0) okr = http_write_all(client, r4_cap, r4_cap_len);
+        if (okr) okr = http_write_all(client, r_end, r_end_len);
+        int status_r = 0;
+        if (okr) {
+            (void)esp_http_client_fetch_headers(client);
+            status_r = esp_http_client_get_status_code(client);
+        }
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        if (okr && status_r == 200) {
+            ESP_LOGI(TAG, "Relay send OK (%u bytes)", (unsigned)jpg_len);
+            return true;
+        } else {
+            ESP_LOGW(TAG, "Relay send failed (ok=%d, http=%d)", okr, status_r);
+            return false;
+        }
+    }
+
+    // If all connection attempts failed (and no relay configured), bail out gracefully
+    if (client == NULL) {
+        ESP_LOGE(TAG, "No HTTP client connection available; aborting send");
+        return false;
     }
 
     bool ok = http_write_all(client, part1, part1_len)
@@ -162,14 +258,8 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
         return false;
     }
 
-    int64_t resp_len = esp_http_client_fetch_headers(client);
+    (void)esp_http_client_fetch_headers(client);
     int status = esp_http_client_get_status_code(client);
-    if (resp_len >= 0) {
-        // Optionally read a small body for logging
-        char buf[128];
-        int n = esp_http_client_read(client, buf, sizeof(buf) - 1);
-        if (n > 0) { buf[n] = 0; ESP_LOGI(TAG, "resp(%d): %s", status, buf); }
-    }
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -177,6 +267,9 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
     bool success = (status == 200);
     if (!success) {
         ESP_LOGE(TAG, "Telegram sendPhoto failed, HTTP %d", status);
+        if (status == 400) {
+        // For 400 (Bad Request), verify your chat_id and that you started the bot.
+        }
     } else {
         ESP_LOGI(TAG, "Telegram sendPhoto OK (%u bytes)", (unsigned)jpg_len);
     }
