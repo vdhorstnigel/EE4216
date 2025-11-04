@@ -15,6 +15,9 @@ const char *MQTT_Broker_Username = "ESP32";
 const char *MQTT_Broker_Password = "Password1234!";
 const char *MQTT_Detection_topic = "Detection";
 
+const char *ESP32_Receiver_IP = "192.168.0.100";
+const short ESP32_Receiver_Port = 80;
+
 
 const char* ca_cert= \
 "-----BEGIN CERTIFICATE-----\n" \
@@ -65,7 +68,3 @@ const char* telegram_cert= \
 "LPAvTK33sefOT6jEm0pUBsV/fdUID+Ic/n4XuKxe9tQWskMJDE32p2u0mYRlynqI\n" \
 "4uJEvlz36hz1\n" \
 "-----END CERTIFICATE-----\n";
-
-// TCP snapshot receiver configuration (set these to enable TCP snapshots)
-const char* TCP_Server_IP = "";           // e.g., "192.168.0.2"
-const unsigned short TCP_Server_Port = 0;  // e.g., 5001

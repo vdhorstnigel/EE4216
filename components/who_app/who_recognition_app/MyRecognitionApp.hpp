@@ -8,6 +8,7 @@
 #include "esp_heap_caps.h"
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 
 extern "C" bool http_streaming_active(void);
 
@@ -16,6 +17,7 @@ extern "C" bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
                                                uint16_t height,
                                                uint8_t quality,
                                                const char *caption);
+extern "C" bool send_json_over_tcp(const char *ip, uint16_t port, const char *json, size_t len);
 
 class MyRecognitionApp : public who::app::WhoRecognitionAppLCD {
 public:
@@ -49,6 +51,20 @@ protected:
             ESP_LOGI("Recognition", "Recognized face, resetting detection state.");
             m_detection_active = false;
             m_detection_start_tick = 0;
+            int id = -1; float sim = 0.0f;
+            if (std::sscanf(result.c_str(), "id: %d, sim: %f", &id, &sim) == 2) {
+                char json[128];
+                int n = std::snprintf(json, sizeof(json),
+                                      "{\"event\":\"recognition\",\"id\":%d,\"sim\":%.2f}", id, sim);
+                if (n > 0) {
+                    (void)send_json_over_tcp(ESP32_Receiver_IP, ESP32_Receiver_Port, json, (size_t)n);
+                }
+            }
+        }
+        else if (result.find("who?") != std::string::npos) {
+            // Unknown face: send JSON too if desired
+            const char *json = "{\"event\":\"recognition\",\"id\":null,\"sim\":null}";
+            (void)send_json_over_tcp(ESP32_Receiver_IP, ESP32_Receiver_Port, json, strlen(json));
         }
     }
 

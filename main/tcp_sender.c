@@ -8,6 +8,37 @@
 
 static const char *TAG = "tcp_sender";
 
+// Send an arbitrary JSON blob over TCP with a 4-byte big-endian length prefix
+bool send_json_over_tcp(const char *ip, uint16_t port, const char *json, size_t len) {
+    if (!ip || !json || len == 0) return false;
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "socket() failed: errno=%d", errno);
+        return false;
+    }
+    struct sockaddr_in dest = { .sin_family = AF_INET, .sin_port = htons(port) };
+    inet_pton(AF_INET, ip, &dest.sin_addr);
+    if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) != 0) {
+        ESP_LOGE(TAG, "connect(%s:%u) failed: errno=%d", ip, (unsigned)port, errno);
+        close(sock);
+        return false;
+    }
+    uint32_t net_len = htonl((uint32_t)len);
+    ssize_t n1 = send(sock, &net_len, sizeof(net_len), 0);
+    ssize_t n2 = -1;
+    if (n1 == sizeof(net_len)) {
+        n2 = send(sock, json, len, 0);
+    }
+    bool ok = (n1 == sizeof(net_len) && n2 == (ssize_t)len);
+    if (!ok) {
+        ESP_LOGE(TAG, "send JSON failed: n1=%d n2=%d errno=%d", (int)n1, (int)n2, errno);
+    } else {
+        ESP_LOGI(TAG, "JSON sent (%u bytes)", (unsigned)len);
+    }
+    close(sock);
+    return ok;
+}
+
 bool send_jpeg_over_tcp(const char *ip, uint16_t port) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
