@@ -253,5 +253,5 @@ direct_dependencies:
 - espressif/usb_host_uvc
 - idf
 manifest_hash: 9c38ada5049ae52ec1357b13f2a8779170c580b7a1a5dbd635c52508aa7726bc
-target: esp32
+target: esp32s3
 version: 2.0.0

@@ -21,6 +21,9 @@ private:
     lcd::WhoLCD *m_lcd;
 #if !BSP_CONFIG_NO_GRAPHIC_LIB
     lv_obj_t *m_canvas;
+    uint8_t *m_canvas_buf;
+    int m_canvas_width;
+    int m_canvas_height;
 #endif
     frame_cap::WhoFrameCapNode *m_frame_cap_node;
     bool m_peek_index;

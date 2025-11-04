@@ -2,10 +2,21 @@
 #include "who_recognition_app_lcd.hpp"
 #include "who_recognition_app_term.hpp"
 #include "who_spiflash_fatfs.hpp"
-#include "wifi_connect.c"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include <inttypes.h>
+#ifdef __cplusplus
+extern "C" void wifi_init(void);
+#else
+void wifi_init(void);
+#endif
 #include "http_streamer.h"
 #include "MyRecognitionApp.hpp"
 #include "recognition_control.h"
+#include "time_sync.h"
 
 using namespace who::frame_cap;
 using namespace who::app;
@@ -39,6 +50,8 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     wifi_init();
+    // Start SNTP time sync early to ensure TLS handshakes validate correctly
+    app_sntp_init();
     start_webserver();
 #if CONFIG_IDF_TARGET_ESP32S3
     auto frame_cap = get_dvp_frame_cap_pipeline();
