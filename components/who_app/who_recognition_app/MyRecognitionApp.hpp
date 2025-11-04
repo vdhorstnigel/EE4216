@@ -5,6 +5,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
+#include <cstdlib>
+#include <cstring>
 
 
 extern "C" bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
@@ -68,9 +71,47 @@ protected:
                 if (last_node) {
                     who::cam::cam_fb_t *fb = last_node->cam_fb_peek(-1);
                     if (fb && fb->buf && fb->width && fb->height) {
-                        ESP_LOGI("Detection", "Motion snapshot: sending to Telegram");
-                        (void)send_rgb565_image_to_telegram((const uint8_t *)fb->buf, fb->width, fb->height, 40, "Motion Detected");
-                        m_last_send_tick = now;
+                        ESP_LOGI("Detection", "Motion snapshot: queue send task");
+                        const size_t rgb_len = (size_t)fb->width * fb->height * 2;
+                        uint8_t *copy = (uint8_t *)heap_caps_malloc(rgb_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                        if (!copy) {
+                            copy = (uint8_t *)malloc(rgb_len);
+                        }
+                        if (copy) {
+                            memcpy(copy, fb->buf, rgb_len);
+                            // Prepare context
+                            auto *ctx = (MotionSendCtx *)malloc(sizeof(MotionSendCtx));
+                            if (ctx) {
+                                ctx->rgb565 = copy;
+                                ctx->len = rgb_len;
+                                ctx->width = fb->width;
+                                ctx->height = fb->height;
+                                ctx->quality = 40;
+                                strncpy(ctx->caption, "Motion Detected", sizeof(ctx->caption) - 1);
+                                ctx->caption[sizeof(ctx->caption) - 1] = '\0';
+                                // Create a detached task with a larger stack (~16 KB -> 4096 words)
+                                const uint32_t stack_words = 4096;
+                                BaseType_t ok = xTaskCreatePinnedToCore(&MyRecognitionApp::MotionSendTask,
+                                                                        "MotionSend",
+                                                                        stack_words,
+                                                                        (void *)ctx,
+                                                                        tskIDLE_PRIORITY + 2,
+                                                                        nullptr,
+                                                                        0);
+                                if (ok != pdPASS) {
+                                    ESP_LOGE("Detection", "Failed to create MotionSend task");
+                                    free(copy);
+                                    free(ctx);
+                                } else {
+                                    m_last_send_tick = now;
+                                }
+                            } else {
+                                ESP_LOGE("Detection", "Failed to alloc MotionSendCtx");
+                                free(copy);
+                            }
+                        } else {
+                            ESP_LOGE("Detection", "Failed to alloc RGB565 copy (%ux%u)", fb->width, fb->height);
+                        }
                     }
                 }
             }
@@ -102,6 +143,27 @@ protected:
     }
 
 private:
+    // Context and task to send snapshot without using Detect task stack
+    struct MotionSendCtx {
+        uint8_t *rgb565;
+        size_t len;
+        uint16_t width;
+        uint16_t height;
+        uint8_t quality;
+        char caption[64];
+    };
+
+    static void MotionSendTask(void *arg) {
+        MotionSendCtx *ctx = (MotionSendCtx *)arg;
+        if (ctx) {
+            ESP_LOGI("MotionSend", "Sending snapshot to Telegram (%ux%u)", ctx->width, ctx->height);
+            (void)send_rgb565_image_to_telegram(ctx->rgb565, ctx->width, ctx->height, ctx->quality, ctx->caption);
+            free(ctx->rgb565);
+            free(ctx);
+        }
+        vTaskDelete(nullptr);
+    }
+
     // Toggle LCD drawing (off by default to avoid SPI bus errors during HTTP streaming)
     static constexpr bool kUseLCD = false;
     bool m_recognition_pending;
