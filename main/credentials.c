@@ -66,3 +66,7 @@ const char* telegram_cert= \
 "LPAvTK33sefOT6jEm0pUBsV/fdUID+Ic/n4XuKxe9tQWskMJDE32p2u0mYRlynqI\n" \
 "4uJEvlz36hz1\n" \
 "-----END CERTIFICATE-----\n";
+
+// TCP snapshot receiver configuration (set these to enable TCP snapshots)
+const char* TCP_Server_IP = "";           // e.g., "192.168.0.2"
+const unsigned short TCP_Server_Port = 0;  // e.g., 5001

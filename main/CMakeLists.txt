@@ -5,6 +5,8 @@ set(srcs
     app_main.cpp
     frame_cap_pipeline.cpp
     http_streamer.c
+    tcp_sender.c
+    rgb565_downscale.c
     wifi_connect.c
     recognition_control.cpp
     telegram_sender.c

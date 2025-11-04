@@ -6,6 +6,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "telemetry_flags.h"
+#include <stdlib.h>
 
 class MyRecognitionApp : public who::app::WhoRecognitionAppLCD {
 public:
@@ -115,6 +116,24 @@ extern "C" bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
                                                uint8_t quality,
                                                const char *caption);
 
+// TCP sender for RGB565 as JPEG
+extern "C" bool send_rgb565_image_over_tcp(const uint8_t *rgb565,
+                                            uint16_t width,
+                                            uint16_t height,
+                                            const char *ip,
+                                            uint16_t port,
+                                            uint8_t quality);
+
+// TCP destination from credentials.c
+extern "C" const char* TCP_Server_IP;
+extern "C" const unsigned short TCP_Server_Port;
+
+// Downscale helper
+extern "C" void rgb565_downscale_half(const uint16_t *src,
+                                       uint16_t src_w,
+                                       uint16_t src_h,
+                                       uint16_t *dst);
+
 inline void MyRecognitionApp::motion_task()
 {
     for (;;) {
@@ -134,9 +153,33 @@ inline void MyRecognitionApp::motion_task()
                     m_sending_telegram = true;
                     g_sending_telegram = true;
                     if (fb->format == who::cam::cam_fb_fmt_t::CAM_FB_FMT_RGB565) {
-                        // Lower quality value to reduce encode time and upload size
-                        ok = send_rgb565_image_to_telegram((const uint8_t *)fb->buf, fb->width, fb->height,
-                                                            35, MOTION_CAPTION);
+                        // Downscale to half resolution to speed up JPEG encoding and transfer
+                        const uint16_t src_w = fb->width;
+                        const uint16_t src_h = fb->height;
+                        const uint16_t dst_w = (src_w / 2);
+                        const uint16_t dst_h = (src_h / 2);
+                        const bool do_scale = (dst_w >= 80 && dst_h >= 60); // avoid too tiny frames
+                        const uint16_t *src = (const uint16_t *)fb->buf;
+                        uint16_t *tmp = nullptr;
+                        const uint8_t quality = 30; // lower for faster encode and smaller payload
+                        if (do_scale) {
+                            tmp = (uint16_t *)malloc((size_t)dst_w * dst_h * 2);
+                            if (tmp) {
+                                rgb565_downscale_half(src, src_w, src_h, tmp);
+                            }
+                        }
+                        const uint16_t *send_buf = (tmp ? tmp : src);
+                        const uint16_t send_w = (tmp ? dst_w : src_w);
+                        const uint16_t send_h = (tmp ? dst_h : src_h);
+                        // Prefer TCP snapshot sender if configured, else fallback to Telegram
+                        if (TCP_Server_IP && TCP_Server_IP[0] && TCP_Server_Port) {
+                            ok = send_rgb565_image_over_tcp((const uint8_t *)send_buf, send_w, send_h,
+                                                            TCP_Server_IP, TCP_Server_Port, quality);
+                        } else {
+                            ok = send_rgb565_image_to_telegram((const uint8_t *)send_buf, send_w, send_h,
+                                                                quality, MOTION_CAPTION);
+                        }
+                        if (tmp) free(tmp);
                     } else if (fb->format == who::cam::cam_fb_fmt_t::CAM_FB_FMT_JPEG) {
                         // Not expected in current pipeline, but handle generically by sending already-JPEG camera frame
                         // We can add a helper if needed; for now, skip as it requires length management
