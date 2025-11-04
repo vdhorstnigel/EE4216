@@ -6,6 +6,13 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 
+
+extern "C" bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
+                                               uint16_t width,
+                                               uint16_t height,
+                                               uint8_t quality,
+                                               const char *caption);
+
 class MyRecognitionApp : public who::app::WhoRecognitionAppLCD {
 public:
     explicit MyRecognitionApp(who::frame_cap::WhoFrameCap *frame_cap)
@@ -13,11 +20,10 @@ public:
           m_recognition_pending(false),
           m_detection_active(false),
           m_detection_start_tick(0),
-          m_last_detection_tick(0),
-          m_motion_task(nullptr)
+          m_last_detection_tick(0)
+
     {
-        // Start periodic motion photo sender task
-        xTaskCreatePinnedToCore(&MyRecognitionApp::motion_task_thunk, "MotionPhoto", 3072, this, 2, &m_motion_task, tskNO_AFFINITY);
+
     }
 
     // Expose recognition event group for web control
@@ -40,7 +46,6 @@ protected:
             m_detection_active = false;
             m_detection_start_tick = 0;
         }
-        vtaskDelay(pdMS_TO_TICKS(100)); // Give time for other functions to run
     }
 
     // Detection results (bounding boxes, etc.)
@@ -49,7 +54,8 @@ protected:
         if (kUseLCD) {
             who::app::WhoRecognitionAppLCD::detect_result_cb(result);
         }
-
+        const TickType_t one_sec = pdMS_TO_TICKS(1000);
+        const TickType_t min_send_interval = pdMS_TO_TICKS(10000); // 10s cooldown between motion snapshots
         TickType_t now = xTaskGetTickCount();
         if (!result.det_res.empty()) {
             if (!m_detection_active) {
@@ -57,9 +63,19 @@ protected:
                 m_detection_start_tick = now;
             }
             m_last_detection_tick = now;
-            // If detection sustained for >= 2s
-            const TickType_t five_sec = pdMS_TO_TICKS(2000);
-            if (!m_recognition_pending && (now - m_detection_start_tick >= five_sec)) {
+            if (now - m_last_send_tick >= min_send_interval) {
+                auto last_node = m_frame_cap->get_last_node();
+                if (last_node) {
+                    who::cam::cam_fb_t *fb = last_node->cam_fb_peek(-1);
+                    if (fb && fb->buf && fb->width && fb->height) {
+                        ESP_LOGI("Detection", "Motion snapshot: sending to Telegram");
+                        (void)send_rgb565_image_to_telegram((const uint8_t *)fb->buf, fb->width, fb->height, 40, "Motion Detected");
+                        m_last_send_tick = now;
+                    }
+                }
+            }
+            // If detection sustained for >= 1s
+            if (!m_recognition_pending && (now - m_detection_start_tick >= one_sec)) {
                 auto *rec_task = m_recognition->get_recognition_task();
                 if (rec_task && rec_task->is_active()) {
                     xEventGroupSetBits(rec_task->get_event_group(), who::recognition::WhoRecognitionCore::RECOGNIZE);
@@ -92,53 +108,6 @@ private:
     bool m_detection_active;
     TickType_t m_detection_start_tick;
     TickType_t m_last_detection_tick;
-    TaskHandle_t m_motion_task;
-
-    // TCP receiver settings
-    static constexpr const char *MOTION_TCP_IP = "192.168.0.10";
-    static constexpr uint16_t MOTION_TCP_PORT = 5050;
-
-    static void motion_task_thunk(void *arg) {
-        static_cast<MyRecognitionApp *>(arg)->motion_task();
-    }
-    void motion_task();
+    TickType_t m_motion_detected_tick;
+    TickType_t m_last_send_tick {0};
 };
-
-// Motion photo sender implementation
-extern "C" bool send_rgb565_image_over_tcp(const uint8_t *rgb565,
-                                            uint16_t width,
-                                            uint16_t height,
-                                            const char *ip,
-                                            uint16_t port,
-                                            uint8_t quality);
-
-inline void MyRecognitionApp::motion_task()
-{
-    for (;;) {
-        // Send every t seconds while detection is active
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        if (m_detection_active) {
-            // Get latest frame from the capture pipeline
-            auto last_node = m_frame_cap->get_last_node();
-            if (last_node) {
-                who::cam::cam_fb_t *fb = last_node->cam_fb_peek(-1);
-                if (fb && fb->buf && fb->width && fb->height) {
-                    bool ok = false;
-                    if (fb->format == who::cam::cam_fb_fmt_t::CAM_FB_FMT_RGB565) {
-                        ok = send_rgb565_image_over_tcp((const uint8_t *)fb->buf, fb->width, fb->height,
-                                                        MOTION_TCP_IP, MOTION_TCP_PORT, 60);
-                    } else if (fb->format == who::cam::cam_fb_fmt_t::CAM_FB_FMT_JPEG) {
-                        // Not expected in current pipeline, but handle generically by sending already-JPEG camera frame
-                        // We can add a helper if needed; for now, skip as it requires length management
-                        ok = false;
-                    }
-                    if (ok) {
-                        ESP_LOGI("MotionPhoto", "Photo sent to %s:%u", MOTION_TCP_IP, MOTION_TCP_PORT);
-                    } else {
-                        ESP_LOGW("MotionPhoto", "Failed to send photo");
-                    }
-                }
-            }
-        }
-    }
-}
