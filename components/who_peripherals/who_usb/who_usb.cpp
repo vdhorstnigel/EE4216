@@ -11,6 +11,11 @@ void WhoUSB::task()
     const usb_host_config_t host_config = {
         .skip_phy_setup = false,
         .intr_flags = ESP_INTR_FLAG_LEVEL1,
+#ifdef USB_HOST_LIB_VER_MAJOR
+        // For newer IDF versions where these fields exist
+        .root_port_unpowered = false,
+        .enum_filter_cb = NULL,
+#endif
     };
     ESP_ERROR_CHECK(usb_host_install(&host_config));
     xEventGroupSetBits(m_event_group, USB_HOST_INSTALLED);

@@ -19,6 +19,15 @@ extern const char *telegram_cert;
 extern const char *Telegram_Relay_URL;
 
 
+// Common HTTP client setup for Telegram POST
+static inline void setup_http_client(esp_http_client_handle_t h, const char *ctype)
+{
+    esp_http_client_set_method(h, HTTP_METHOD_POST);
+    esp_http_client_set_header(h, "Content-Type", ctype);
+    esp_http_client_set_header(h, "User-Agent", "esp-idf-telegram/1.0");
+}
+
+
 static bool http_write_all(esp_http_client_handle_t client, const void *buf, int len) {
     const uint8_t *p = (const uint8_t *)buf;
     int total = 0;
@@ -72,7 +81,8 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
 
     size_t content_length = (size_t)part1_len + (size_t)part2_hdr_len + jpg_len + (size_t)part3_cap_len + (size_t)closing_len;
 
-    // Prefer pinned certificate first as requested; fallback to IDF bundle if needed
+    // Prefer pinned certificate first; if that fails (e.g., different CDN/CA on some networks),
+    // fallback to ESP-IDF certificate bundle for broader trust coverage.
     esp_http_client_handle_t client = NULL;
     char ctype[96];
     snprintf(ctype, sizeof(ctype), "multipart/form-data; boundary=%s", boundary);
@@ -80,40 +90,64 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
     esp_err_t err = ESP_FAIL;
     const int max_attempts = 3;
 
+    // Wait briefly for SNTP time to be set so TLS validation is reliable
     {
-        esp_http_client_config_t cfg_pinned = {
+        const time_t cutoff = 1609459200; // 2021-01-01
+        const uint32_t max_wait_ms = 10000;
+        uint32_t waited = 0;
+        while (time(NULL) < cutoff && waited < max_wait_ms) {
+            vTaskDelay(pdMS_TO_TICKS(250));
+            waited += 250;
+        }
+        if (waited >= max_wait_ms) {
+            ESP_LOGW(TAG, "Time not synced yet; attempting TLS anyway");
+        }
+    }
+
+    // 1) Try pinned root first
+    esp_http_client_config_t cfg_pinned = {
+        .url = url,
+        .cert_pem = telegram_cert,
+        .timeout_ms = 30000,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
+        .keep_alive_enable = false,
+        .buffer_size_tx = 2048,
+        .buffer_size = 2048,
+    };
+    client = esp_http_client_init(&cfg_pinned);
+    if (client) {
+        setup_http_client(client, ctype);
+        for (int attempt = 1; attempt <= max_attempts; ++attempt) {
+            err = esp_http_client_open(client, content_length);
+            if (err == ESP_OK) break;
+            ESP_LOGW(TAG, "http_open (pinned) attempt %d/%d failed: %s", attempt, max_attempts, esp_err_to_name(err));
+            vTaskDelay(pdMS_TO_TICKS(500 * attempt));
+        }
+        if (err != ESP_OK) {
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+            client = NULL;
+        }
+    }
+
+    // 2) Fallback: use ESP certificate bundle (covers multiple CAs across CDNs)
+    if (client == NULL) {
+        esp_http_client_config_t cfg_bundle = {
             .url = url,
-            .cert_pem = telegram_cert,
+            .crt_bundle_attach = esp_crt_bundle_attach,
             .timeout_ms = 30000,
             .transport_type = HTTP_TRANSPORT_OVER_SSL,
             .keep_alive_enable = false,
-            .buffer_size_tx = 4096,
-            .buffer_size = 4096,
+            .buffer_size_tx = 2048,
+            .buffer_size = 2048,
         };
-        client = esp_http_client_init(&cfg_pinned);
+        client = esp_http_client_init(&cfg_bundle);
         if (client) {
-            esp_http_client_set_method(client, HTTP_METHOD_POST);
-            esp_http_client_set_header(client, "Content-Type", ctype);
-            esp_http_client_set_header(client, "User-Agent", "esp-idf-telegram/1.0");
-
-            // Wait briefly for SNTP time to be set so TLS validation is reliable
-            {
-                const time_t cutoff = 1609459200; // 2021-01-01
-                const uint32_t max_wait_ms = 10000;
-                uint32_t waited = 0;
-                while (time(NULL) < cutoff && waited < max_wait_ms) {
-                    vTaskDelay(pdMS_TO_TICKS(250));
-                    waited += 250;
-                }
-                if (waited >= max_wait_ms) {
-                    ESP_LOGW(TAG, "Time not synced yet; attempting TLS anyway");
-                }
-            }
-
+            setup_http_client(client, ctype);
             for (int attempt = 1; attempt <= max_attempts; ++attempt) {
                 err = esp_http_client_open(client, content_length);
                 if (err == ESP_OK) break;
-                ESP_LOGD(TAG, "http_open (pinned) attempt %d/%d failed: %s", attempt, max_attempts, esp_err_to_name(err));
+                ESP_LOGW(TAG, "http_open (bundle) attempt %d/%d failed: %s", attempt, max_attempts, esp_err_to_name(err));
                 vTaskDelay(pdMS_TO_TICKS(500 * attempt));
             }
             if (err != ESP_OK) {
@@ -124,9 +158,9 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
         }
     }
 
-    // If all connection attempts failed (and no relay configured), bail out gracefully
+    // If all connection attempts failed, bail out gracefully
     if (client == NULL) {
-        ESP_LOGE(TAG, "No HTTP client connection available; aborting send");
+        ESP_LOGE(TAG, "No HTTP client connection available after pinned+bundle attempts; aborting send");
         return false;
     }
 
