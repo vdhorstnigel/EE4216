@@ -56,9 +56,18 @@ protected:
             if (std::sscanf(result.c_str(), "id: %d, sim: %f", &id, &sim) == 2) {
                 char json[128];
                 //int n = std::snprintf(json, sizeof(json), "{\"event\":\"recognition\",\"id\":%d,\"sim\":%.2f}", id, sim);
-                int n = std::snprintf(json, sizeof(json),"authorized,%.2f", sim);
+                int n = std::snprintf(json, sizeof(json), "authorized,%.2f", sim);
                 if (n > 0) {
-                    (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, json, (size_t)n);
+                    if (n >= (int)sizeof(json)) n = (int)sizeof(json) - 1; // clamp on truncation
+                    // Throttle API POST to once per 10 seconds
+                    const TickType_t min_api_interval = pdMS_TO_TICKS(10000);
+                    TickType_t now_tick = xTaskGetTickCount();
+                    if (now_tick - m_last_api_post_tick >= min_api_interval) {
+                        (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, json, (size_t)n);
+                        m_last_api_post_tick = now_tick;
+                    } else {
+                        ESP_LOGI("Recognition", "API post throttled (%u ms remaining)", (unsigned)pdTICKS_TO_MS(min_api_interval - (now_tick - m_last_api_post_tick)));
+                    }
                 }
             }
         }
@@ -66,7 +75,14 @@ protected:
             // Unknown face: send JSON too if desired
             //const char *json = "{\"event\":\"recognition\",\"id\":null,\"sim\":null}";
             const char *json = "denied,0";
-            (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, json, strlen(json));
+            const TickType_t min_api_interval = pdMS_TO_TICKS(10000);
+            TickType_t now_tick = xTaskGetTickCount();
+            if (now_tick - m_last_api_post_tick >= min_api_interval) {
+                (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, json, strlen(json));
+                m_last_api_post_tick = now_tick;
+            } else {
+                ESP_LOGI("Recognition", "API post throttled (%u ms remaining)", (unsigned)pdTICKS_TO_MS(min_api_interval - (now_tick - m_last_api_post_tick)));
+            }
         }
     }
 
@@ -77,7 +93,7 @@ protected:
             who::app::WhoRecognitionAppLCD::detect_result_cb(result);
         }
         const TickType_t one_sec = pdMS_TO_TICKS(1000);
-        const TickType_t min_send_interval = pdMS_TO_TICKS(10000); // cooldown between motion snapshots
+        const TickType_t min_send_interval = pdMS_TO_TICKS(30000); // cooldown between motion snapshots, put 30 seconds to prevent spams
         TickType_t now = xTaskGetTickCount();
         if (!result.det_res.empty()) {
             if (!m_detection_active) {
@@ -212,4 +228,5 @@ private:
     TickType_t m_motion_detected_tick;
     TickType_t m_last_send_tick {0};
     static inline volatile bool s_sending_snapshot = false;
+    TickType_t m_last_api_post_tick {0};
 };

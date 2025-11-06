@@ -26,7 +26,7 @@ bool post_plain_to_server(const char *ip,
 
     esp_http_client_config_t cfg = {
         .url = url,
-        .timeout_ms = 8000,
+        .timeout_ms = 12000,
         .transport_type = HTTP_TRANSPORT_OVER_TCP,
         .keep_alive_enable = false,
         .buffer_size = 1024,
@@ -39,9 +39,20 @@ bool post_plain_to_server(const char *ip,
     esp_http_client_set_header(client, "Content-Type", "text/plain; charset=utf-8");
     esp_http_client_set_post_field(client, body, (int)len);
 
-    esp_err_t err = esp_http_client_perform(client);
+    // Perform with a small retry on transient EAGAIN/timeout
+    esp_err_t err = ESP_FAIL;
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+        err = esp_http_client_perform(client);
+        if (err == ESP_OK) break;
+        if (err == ESP_ERR_HTTP_EAGAIN || err == ESP_ERR_TIMEOUT) {
+            ESP_LOGW(TAG_HTTP, "perform attempt %d failed: %s (retrying)", attempt, esp_err_to_name(err));
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+        break;
+    }
     if (err != ESP_OK) {
-        ESP_LOGE(TAG_HTTP, "perform failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG_HTTP, "perform failed: %s (len=%d)", esp_err_to_name(err), (int)len);
         esp_http_client_cleanup(client);
         return false;
     }
