@@ -2,6 +2,7 @@
 #include "esp_log.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 
 static const char *TAG_HTTP = "http_sender";
 
