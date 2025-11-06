@@ -84,6 +84,7 @@ protected:
             m_stable_sim = cur_sim;
             m_stable_start_tick = now_tick;
             m_stable_sent = false;
+            m_last_stable_post_tick = 0;
             return;
         }
 
@@ -94,24 +95,34 @@ protected:
             m_stable_sim = cur_sim;
             m_stable_start_tick = now_tick;
             m_stable_sent = false;
+            m_last_stable_post_tick = 0;
             return;
         }
 
-        // Same outcome: update sim (for known) and check window
+        // Same outcome: update sim (for known) and check stability + periodic resend
         m_stable_sim = cur_sim;
-        if (!m_stable_sent && (now_tick - m_stable_start_tick >= one_sec)) {
-            if (m_stable_known) {
-                char body[64];
-                int n = std::snprintf(body, sizeof(body), "authorized,%.2f", m_stable_sim);
-                if (n > 0) {
-                    if (n >= (int)sizeof(body)) n = (int)sizeof(body) - 1;
-                    (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);
-                }
-            } else {
-                const char *body = "denied,0";
-                (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body));
+        if (now_tick - m_stable_start_tick >= one_sec) {
+            bool should_send = false;
+            if (!m_stable_sent) {
+                should_send = true; // first send after stability reached
+            } else if (now_tick - m_last_stable_post_tick >= pdMS_TO_TICKS(10000)) {
+                should_send = true; // periodic resend every 10s while stable
             }
-            m_stable_sent = true;
+            if (should_send) {
+                if (m_stable_known) {
+                    char body[64];
+                    int n = std::snprintf(body, sizeof(body), "authorized,%.2f", m_stable_sim);
+                    if (n > 0) {
+                        if (n >= (int)sizeof(body)) n = (int)sizeof(body) - 1;
+                        (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);
+                    }
+                } else {
+                    const char *body = "denied,0";
+                    (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body));
+                }
+                m_stable_sent = true;
+                m_last_stable_post_tick = now_tick;
+            }
         }
     }
 
@@ -264,4 +275,5 @@ private:
     float m_stable_sim {0.0f};
     TickType_t m_stable_start_tick {0};
     bool m_stable_sent {false};
+    TickType_t m_last_stable_post_tick {0};
 };
