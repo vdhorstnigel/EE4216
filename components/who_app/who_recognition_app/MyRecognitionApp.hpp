@@ -48,41 +48,70 @@ protected:
         // allow next trigger
         m_recognition_pending = false;
         ESP_LOGI("Recognition", "%s", result.c_str());
+        const TickType_t one_sec = pdMS_TO_TICKS(1000);
+        TickType_t now_tick = xTaskGetTickCount();
+
+        // Parse current outcome into (known,id,sim)
+        bool cur_known = false;
+        int cur_id = -1;
+        float cur_sim = 0.0f;
         if (result.find("id: ") != std::string::npos) {
-            ESP_LOGI("Recognition", "Recognized face, resetting detection state.");
-            m_detection_active = false;
-            m_detection_start_tick = 0;
             int id = -1; float sim = 0.0f;
             if (std::sscanf(result.c_str(), "id: %d, sim: %f", &id, &sim) == 2) {
-                char json[128];
-                //int n = std::snprintf(json, sizeof(json), "{\"event\":\"recognition\",\"id\":%d,\"sim\":%.2f}", id, sim);
-                int n = std::snprintf(json, sizeof(json), "authorized,%.2f", sim);
-                if (n > 0) {
-                    if (n >= (int)sizeof(json)) n = (int)sizeof(json) - 1; // clamp on truncation
-                    // Throttle API POST to once per 10 seconds
-                    const TickType_t min_api_interval = pdMS_TO_TICKS(10000);
-                    TickType_t now_tick = xTaskGetTickCount();
-                    if (now_tick - m_last_api_post_tick >= min_api_interval) {
-                        (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, json, (size_t)n);
-                        m_last_api_post_tick = now_tick;
-                    } else {
-                        ESP_LOGI("Recognition", "API post throttled (%u ms remaining)", (unsigned)pdTICKS_TO_MS(min_api_interval - (now_tick - m_last_api_post_tick)));
-                    }
-                }
-            }
-        }
-        else if (result.find("who?") != std::string::npos) {
-            // Unknown face: send JSON too if desired
-            //const char *json = "{\"event\":\"recognition\",\"id\":null,\"sim\":null}";
-            const char *json = "denied,0";
-            const TickType_t min_api_interval = pdMS_TO_TICKS(10000);
-            TickType_t now_tick = xTaskGetTickCount();
-            if (now_tick - m_last_api_post_tick >= min_api_interval) {
-                (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, json, strlen(json));
-                m_last_api_post_tick = now_tick;
+                cur_known = true;
+                cur_id = id;
+                cur_sim = sim;
             } else {
-                ESP_LOGI("Recognition", "API post throttled (%u ms remaining)", (unsigned)pdTICKS_TO_MS(min_api_interval - (now_tick - m_last_api_post_tick)));
+                return; // malformed, ignore
             }
+        } else if (result.find("who?") != std::string::npos) {
+            cur_known = false;
+            cur_id = -1;
+            cur_sim = 0.0f;
+        } else {
+            return; // ignore other messages
+        }
+
+        // Reset detection gating since recognition concluded
+        m_detection_active = false;
+        m_detection_start_tick = 0;
+
+        // Stability gate: require same outcome for >= 1s before posting
+        if (m_stable_first) {
+            m_stable_first = false;
+            m_stable_known = cur_known;
+            m_stable_id = cur_id;
+            m_stable_sim = cur_sim;
+            m_stable_start_tick = now_tick;
+            m_stable_sent = false;
+            return;
+        }
+
+        if (m_stable_known != cur_known || m_stable_id != cur_id) {
+            // Outcome changed, restart window
+            m_stable_known = cur_known;
+            m_stable_id = cur_id;
+            m_stable_sim = cur_sim;
+            m_stable_start_tick = now_tick;
+            m_stable_sent = false;
+            return;
+        }
+
+        // Same outcome: update sim (for known) and check window
+        m_stable_sim = cur_sim;
+        if (!m_stable_sent && (now_tick - m_stable_start_tick >= one_sec)) {
+            if (m_stable_known) {
+                char body[64];
+                int n = std::snprintf(body, sizeof(body), "authorized,%.2f", m_stable_sim);
+                if (n > 0) {
+                    if (n >= (int)sizeof(body)) n = (int)sizeof(body) - 1;
+                    (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);
+                }
+            } else {
+                const char *body = "denied,0";
+                (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body));
+            }
+            m_stable_sent = true;
         }
     }
 
@@ -228,5 +257,11 @@ private:
     TickType_t m_motion_detected_tick;
     TickType_t m_last_send_tick {0};
     static inline volatile bool s_sending_snapshot = false;
-    TickType_t m_last_api_post_tick {0};
+    // Recognition stability gating
+    bool m_stable_first {true};
+    bool m_stable_known {false};
+    int m_stable_id {-1};
+    float m_stable_sim {0.0f};
+    TickType_t m_stable_start_tick {0};
+    bool m_stable_sent {false};
 };
