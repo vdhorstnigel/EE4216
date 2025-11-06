@@ -117,7 +117,9 @@ protected:
                                 ctx->quality = 40;
                                 strncpy(ctx->caption, "Motion Detected", sizeof(ctx->caption) - 1);
                                 ctx->caption[sizeof(ctx->caption) - 1] = '\0';
-                                const uint32_t stack_words = 4096;
+                                // TLS handshake can consume deep call stacks via esp_http_client + mbedTLS.
+                                // Use a larger stack to avoid overflows observed on some networks.
+                                const uint32_t stack_words = 8192; // words (x4 bytes) => ~32KB
                                 BaseType_t ok = xTaskCreatePinnedToCore(&MyRecognitionApp::MotionSendTask,
                                                                         "MotionSend",
                                                                         stack_words,
