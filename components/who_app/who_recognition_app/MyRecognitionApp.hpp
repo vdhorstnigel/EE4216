@@ -17,7 +17,8 @@ extern "C" bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
                                                uint16_t height,
                                                uint8_t quality,
                                                const char *caption);
-extern "C" bool send_json_over_tcp(const char *ip, uint16_t port, const char *json, size_t len);
+//extern "C" bool send_json_over_tcp(const char *ip, uint16_t port, const char *json, size_t len);
+extern "C" bool post_plain_to_server(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
 
 class MyRecognitionApp : public who::app::WhoRecognitionAppLCD {
 public:
@@ -54,17 +55,18 @@ protected:
             int id = -1; float sim = 0.0f;
             if (std::sscanf(result.c_str(), "id: %d, sim: %f", &id, &sim) == 2) {
                 char json[128];
-                int n = std::snprintf(json, sizeof(json),
-                                      "{\"event\":\"recognition\",\"id\":%d,\"sim\":%.2f}", id, sim);
+                //int n = std::snprintf(json, sizeof(json), "{\"event\":\"recognition\",\"id\":%d,\"sim\":%.2f}", id, sim);
+                int n = std::snprintf(json, sizeof(json),"authorized,%.2f", sim);
                 if (n > 0) {
-                    (void)send_json_over_tcp(ESP32_Receiver_IP, ESP32_Receiver_Port, json, (size_t)n);
+                    (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, json, (size_t)n);
                 }
             }
         }
         else if (result.find("who?") != std::string::npos) {
             // Unknown face: send JSON too if desired
-            const char *json = "{\"event\":\"recognition\",\"id\":null,\"sim\":null}";
-            (void)send_json_over_tcp(ESP32_Receiver_IP, ESP32_Receiver_Port, json, strlen(json));
+            //const char *json = "{\"event\":\"recognition\",\"id\":null,\"sim\":null}";
+            const char *json = "denied,0";
+            (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, json, strlen(json));
         }
     }
 
@@ -117,9 +119,9 @@ protected:
                                 ctx->quality = 40;
                                 strncpy(ctx->caption, "Motion Detected", sizeof(ctx->caption) - 1);
                                 ctx->caption[sizeof(ctx->caption) - 1] = '\0';
-                                // TLS handshake can consume deep call stacks via esp_http_client + mbedTLS.
-                                // Use a larger stack to avoid overflows observed on some networks.
-                                const uint32_t stack_words = 8192; // words (x4 bytes) => ~32KB
+                                // TLS handshake (mbedTLS) can use a deep call stack; keep reasonably large but not excessive
+                                // to avoid internal RAM exhaustion on task creation. 6144 words ~= 24 KB stack.
+                                const uint32_t stack_words = 6144; // words (x4 bytes) => ~24KB
                                 BaseType_t ok = xTaskCreatePinnedToCore(&MyRecognitionApp::MotionSendTask,
                                                                         "MotionSend",
                                                                         stack_words,
@@ -128,7 +130,12 @@ protected:
                                                                         nullptr,
                                                                         0);
                                 if (ok != pdPASS) {
-                                    ESP_LOGE("Detection", "Failed to create MotionSend task");
+                                    size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+                                    size_t largest_int = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+                                    size_t free_all = xPortGetFreeHeapSize();
+                                    ESP_LOGE("Detection", "Failed to create MotionSend task (req stack %u bytes). Free int=%u, largest int=%u, free total=%u",
+                                             (unsigned)(stack_words * sizeof(StackType_t)),
+                                             (unsigned)free_int, (unsigned)largest_int, (unsigned)free_all);
                                     free(copy);
                                     free(ctx);
                                 } else {
@@ -167,7 +174,7 @@ protected:
 private:
     // Decide dynamically if LCD overlays should be enabled
     static inline bool lcd_enabled() {
-        return !http_streaming_active();
+        return !http_streaming_active() && !s_sending_snapshot;
     }
     // Context and task to send snapshot without using Detect task stack
     struct MotionSendCtx {
@@ -184,8 +191,13 @@ private:
         if (ctx) {
             // Yield once so critical tasks can run
             vTaskDelay(1);
+            s_sending_snapshot = true;
+            UBaseType_t hw_before = uxTaskGetStackHighWaterMark(nullptr);
             ESP_LOGI("MotionSend", "Sending snapshot to Telegram (%ux%u)", ctx->width, ctx->height);
             (void)send_rgb565_image_to_telegram(ctx->rgb565, ctx->width, ctx->height, ctx->quality, ctx->caption);
+            UBaseType_t hw_after = uxTaskGetStackHighWaterMark(nullptr);
+            ESP_LOGI("MotionSend", "Stack watermark (words) before/after: %u/%u", (unsigned)hw_before, (unsigned)hw_after);
+            s_sending_snapshot = false;
             free(ctx->rgb565);
             free(ctx);
         }
@@ -199,4 +211,5 @@ private:
     TickType_t m_last_detection_tick;
     TickType_t m_motion_detected_tick;
     TickType_t m_last_send_tick {0};
+    static inline volatile bool s_sending_snapshot = false;
 };

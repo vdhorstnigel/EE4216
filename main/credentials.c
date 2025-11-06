@@ -15,8 +15,9 @@ const char *MQTT_Broker_Username = "ESP32";
 const char *MQTT_Broker_Password = "Password1234!";
 const char *MQTT_Detection_topic = "Detection";
 
-const char *ESP32_Receiver_IP = "192.168.0.100";
+const char *ESP32_Receiver_IP = "10.117.110.218";
 const short ESP32_Receiver_Port = 80;
+const char *ESP32_Receiver_Path = "/detect";
 
 
 const char* ca_cert= \

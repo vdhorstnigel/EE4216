@@ -111,8 +111,8 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
         .timeout_ms = 30000,
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
         .keep_alive_enable = false,
-        .buffer_size_tx = 2048,
-        .buffer_size = 2048,
+        .buffer_size_tx = 1024,
+        .buffer_size = 1024,
     };
     client = esp_http_client_init(&cfg_pinned);
     if (client) {
@@ -138,8 +138,8 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
             .timeout_ms = 30000,
             .transport_type = HTTP_TRANSPORT_OVER_SSL,
             .keep_alive_enable = false,
-            .buffer_size_tx = 2048,
-            .buffer_size = 2048,
+            .buffer_size_tx = 1024,
+            .buffer_size = 1024,
         };
         client = esp_http_client_init(&cfg_bundle);
         if (client) {
