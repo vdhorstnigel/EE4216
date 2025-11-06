@@ -31,8 +31,6 @@ static const char *INDEX_HTML =
     "<header><h3>ESP Camera Stream</h3></header><main>"
     "<iframe id='vid' src='/stream' frameborder='0'></iframe>"
     "</main><div id=bar>"
-    "<button onclick=go('enroll')>Enroll</button>"
-    "<button onclick=go('clear')>Delete All</button>"
     "<span id=msg style='margin-left:12px;color:#555'></span>"
     "</div><script>"
     "const msgEl=document.getElementById('msg');"
