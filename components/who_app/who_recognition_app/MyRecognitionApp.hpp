@@ -230,7 +230,8 @@ protected:
 private:
     // Decide dynamically if LCD overlays should be enabled
     static inline bool lcd_enabled() {
-        return !http_streaming_active() && !s_sending_snapshot;
+        return true;
+        //return !http_streaming_active() && !s_sending_snapshot;
     }
     // Context and task to send snapshot without using Detect task stack
     struct MotionSendCtx {

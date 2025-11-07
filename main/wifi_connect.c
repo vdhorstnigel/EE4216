@@ -8,6 +8,9 @@
 #include "nvs_flash.h" //non volatile storage
 #include "lwip/err.h" //light weight ip packets error handling
 #include "lwip/sys.h" //system applications for light weight ip apps
+#include "esp_netif.h" // network interface (DHCP/static IP)
+#include "lwip/ip4_addr.h" // IPv4 helpers (IP4_ADDR, ip4_addr_t)
+#include "lwip/def.h" // PP_HTONL, LWIP_MAKEU32
 #include <stdbool.h>
 #include "esp_eap_client.h"
 #include "credentials.c"
@@ -37,24 +40,33 @@ else if (event_id == IP_EVENT_STA_GOT_IP)
 
 void wifi_init()
 {
-    esp_netif_create_default_wifi_sta();  
-    wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_set_ps(WIFI_PS_NONE);
-    ESP_ERROR_CHECK(esp_wifi_init(&wifi_initiation)); //     
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
-    wifi_config_t wifi_configuration = {
-        .sta = {
-            .ssid = "",
-            .password = "",
-            .pmf_cfg = {
-            .capable = true,
-            .required = false
-           }
-           }
-        };
-    strcpy((char*)wifi_configuration.sta.ssid, ssid);
-    strcpy((char*)wifi_configuration.sta.password, password);  
+  // Create default STA netif and keep the handle so we can set static IP
+  esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();  
+  wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  ESP_ERROR_CHECK(esp_wifi_init(&wifi_initiation)); //     
+  ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
+  ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
+  // Zero-initialize wifi configuration then set fields explicitly to avoid missing-field warnings
+  wifi_config_t wifi_configuration = {0};
+  wifi_configuration.sta.pmf_cfg.capable = true;
+  wifi_configuration.sta.pmf_cfg.required = false;
+
+    // Configure static IPv4 for the STA interface
+  esp_netif_ip_info_t ip_info;
+  ip_info.ip.addr = PP_HTONL(LWIP_MAKEU32(10,117,110,15));
+  ip_info.gw.addr = PP_HTONL(LWIP_MAKEU32(10,117,110,197));
+  ip_info.netmask.addr = PP_HTONL(LWIP_MAKEU32(255,255,255,0));
+
+    // Stop DHCP client and apply the static IP settings before connecting
+    esp_err_t dhcp_stop_err = esp_netif_dhcpc_stop(sta_netif);
+    if (dhcp_stop_err != ESP_OK && dhcp_stop_err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        ESP_LOGW("wifi_init", "DHCP stop failed: %s", esp_err_to_name(dhcp_stop_err));
+    }
+  ESP_ERROR_CHECK(esp_netif_set_ip_info(sta_netif, &ip_info));
+
+  strncpy((char*)wifi_configuration.sta.ssid, ssid, sizeof(wifi_configuration.sta.ssid)-1);
+  strncpy((char*)wifi_configuration.sta.password, password, sizeof(wifi_configuration.sta.password)-1);  
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_configuration));
     // 3 - Wi-Fi Start Phase
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
@@ -67,22 +79,17 @@ void wifi_init()
 
 void nus_wifi_init()
 {
-    esp_netif_create_default_wifi_sta();  
-    wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_set_ps(WIFI_PS_NONE);
-    ESP_ERROR_CHECK(esp_wifi_init(&wifi_initiation)); //     
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
-    wifi_config_t wifi_configuration = {
-        .sta = {
-            .ssid = "",
-            .pmf_cfg = {
-            .capable = true,
-            .required = false
-           }
-           }
-        };
-    strcpy((char*)wifi_configuration.sta.ssid, NUS_ssid);
+  esp_netif_create_default_wifi_sta();  
+  wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  ESP_ERROR_CHECK(esp_wifi_init(&wifi_initiation)); //     
+  ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
+  ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
+  // Zero-initialize to avoid missing-field warnings
+  wifi_config_t wifi_configuration = {0};
+  wifi_configuration.sta.pmf_cfg.capable = true;
+  wifi_configuration.sta.pmf_cfg.required = false;
+  strncpy((char*)wifi_configuration.sta.ssid, NUS_ssid, sizeof(wifi_configuration.sta.ssid)-1);
 
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_configuration));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
