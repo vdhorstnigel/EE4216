@@ -38,20 +38,21 @@ protected:
         const TickType_t one_sec = pdMS_TO_TICKS(1000);
         TickType_t now_tick = xTaskGetTickCount();
 
-        // Parse results for id and sim 
+        // Parse results for id and similarity
         bool cur_known = false;
         int cur_id = -1;
+        float cur_sim = 0.0f;
 
         if (result.find("id: ") != std::string::npos) {
-            int id = -1; float sim = 0.0f;
-            if (std::sscanf(result.c_str(), "id: %d, sim: %f", &id, &sim) == 2) {
+            int id = -1; float parsed_sim = 0.0f;
+            if (std::sscanf(result.c_str(), "id: %d, sim: %f", &id, &parsed_sim) == 2) {
                 cur_known = true;
                 cur_id = id;
-                sim = sim;
+                cur_sim = parsed_sim;
             }
         } else if (result.find("who?") != std::string::npos) {
             cur_known = false;
-        } 
+        }
 
         // Require same outcome for 1s before posting
         if (m_stable_first) {
@@ -68,6 +69,7 @@ protected:
         if (m_stable_known != cur_known || m_stable_id != cur_id) {
             m_stable_known = cur_known;
             m_stable_id = cur_id;
+            m_stable_sim = cur_sim;
             m_stable_start_tick = now_tick;
             m_stable_sent = false;
             m_last_stable_post_tick = 0;
@@ -85,7 +87,7 @@ protected:
             if (should_send) {
                 if (m_stable_known) {
                     char body[64];
-                    int n = std::snprintf(body, sizeof(body), "authorized,%.2f", sim);
+                    int n = std::snprintf(body, sizeof(body), "authorized,%.2f", m_stable_sim);
                     if (n > 0) {
                         if (n >= (int)sizeof(body)) n = (int)sizeof(body) - 1;
                         net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);

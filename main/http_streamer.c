@@ -2,8 +2,12 @@
 #include "esp_camera.h"
 #include "esp_log.h"
 #include <string.h>
+#include <stdbool.h>
+#include <stdlib.h>
 #include "img_converters.h"
 #include "recognition_control.h"
+#include "net_sender.h"
+#include "http_streamer.h"
 
 // Forward declare local handlers used in URI registration
 static esp_err_t index_get_handler(httpd_req_t *req);
@@ -15,7 +19,7 @@ static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=fr
 static const char *_STREAM_BOUNDARY = "\r\n--frame\r\n";
 static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 
-extern "C" bool net_send_telegram_rgb565_take(uint8_t *rgb565, size_t rgb565_len, uint16_t width, uint16_t height, uint8_t quality, const char *caption);
+static volatile bool s_streaming_active = false;
 
 static const char *INDEX_HTML =
     "<!doctype html><html><head><meta name=viewport content='width=device-width, initial-scale=1'/>"
@@ -117,30 +121,59 @@ static esp_err_t index_get_handler(httpd_req_t *req) {
     return httpd_resp_send(req, INDEX_HTML, HTTPD_RESP_USE_STRLEN);
 }
 
-static esp_err_t motion_get_handler(httpd_req_t *req) {
-    auto last_node = m_frame_cap->get_last_node();
-                if (last_node) {
-                    who::cam::cam_fb_t *fb = last_node->cam_fb_peek(-1);
-                    if (fb && fb->buf && fb->width && fb->height) {
-                        const size_t rgb_len = (size_t)fb->width * fb->height * 2;
-                        uint8_t *copy = (uint8_t *)heap_caps_malloc(rgb_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                        if (!copy) copy = (uint8_t *)malloc(rgb_len);
-                        if (copy) {
-                            memcpy(copy, fb->buf, rgb_len);
-                            char caption[64];
-                            strncpy(caption, "Motion Detected", sizeof(caption) - 1);
-                            caption[sizeof(caption) - 1] = '\0';
-                            if (net_send_telegram_rgb565_take(copy, rgb_len, fb->width, fb->height, 40, caption)) {
-                                m_last_send_tick = now;
-                            } else {
-                                // Fallback: free copy (since queue didn't take ownership)
-                                free(copy);
-                            }
-                        } else {
-                            ESP_LOGE("Detection", "Alloc snapshot buffer failed (%ux%u)", fb->width, fb->height);
-                        }
-                    }
-
-            }
+// Simple action handler placeholder (extend with query parsing as needed)
+static esp_err_t action_get_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
+
+static esp_err_t motion_get_handler(httpd_req_t *req) {
+    // Capture a single frame and enqueue for Telegram send (RGB565 expected)
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "fb failed");
+        return ESP_FAIL;
+    }
+    // If JPEG, convert to RGB565
+    uint8_t *rgb565_buf = NULL;
+    size_t rgb565_len = 0;
+    uint16_t width = fb->width;
+    uint16_t height = fb->height;
+    if (fb->format == PIXFORMAT_RGB565) {
+        rgb565_len = fb->len;
+        rgb565_buf = (uint8_t *)malloc(rgb565_len);
+        if (rgb565_buf) memcpy(rgb565_buf, fb->buf, rgb565_len);
+    } else {
+        rgb565_len = (size_t)width * height * 2;
+        rgb565_buf = (uint8_t *)malloc(rgb565_len);
+        if (rgb565_buf) {
+            // Use jpeg decoder helper when source is JPEG, otherwise copy unsupported formats fail
+            if (fb->format == PIXFORMAT_JPEG) {
+                if (!jpg2rgb565(fb->buf, fb->len, rgb565_buf, JPG_SCALE_NONE)) {
+                    free(rgb565_buf);
+                    rgb565_buf = NULL;
+                }
+            } else {
+                // For other raw formats (e.g. YUV) a dedicated converter would be needed; fallback to failure
+                free(rgb565_buf);
+                rgb565_buf = NULL;
+            }
+        }
+    }
+    esp_camera_fb_return(fb);
+    if (!rgb565_buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "convert failed");
+        return ESP_FAIL;
+    }
+    const char *caption = "Motion Detected";
+    if (!net_send_telegram_rgb565_take(rgb565_buf, rgb565_len, width, height, 40, caption)) {
+        free(rgb565_buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "enqueue failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+bool http_streaming_active(void) { return s_streaming_active; }

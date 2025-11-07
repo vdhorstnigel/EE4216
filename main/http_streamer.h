@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 httpd_handle_t start_webserver(void);
+bool http_streaming_active(void);
 
 
 #ifdef __cplusplus

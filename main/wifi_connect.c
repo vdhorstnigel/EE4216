@@ -38,7 +38,7 @@ else if (event_id == IP_EVENT_STA_GOT_IP)
 }
 
 
-void wifi_init()
+void static_wifi_init()
 {
   esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();  
   wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
@@ -76,6 +76,35 @@ void wifi_init()
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
     //wifi_scan();
+    // 4- Wi-Fi Connect Phase
+    ESP_ERROR_CHECK(esp_wifi_connect());
+    printf( "wifi_init_sta finished. SSID:%s\n",ssid);
+}
+
+void wifi_init()
+{
+    esp_netif_create_default_wifi_sta();  
+    wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    ESP_ERROR_CHECK(esp_wifi_init(&wifi_initiation)); //     
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
+    wifi_config_t wifi_configuration = {
+        .sta = {
+            .ssid = "",
+            .password = "",
+            .pmf_cfg = {
+            .capable = true,
+            .required = false
+           }
+           }
+        };
+    strcpy((char*)wifi_configuration.sta.ssid, ssid);
+    strcpy((char*)wifi_configuration.sta.password, password);  
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_configuration));
+    // 3 - Wi-Fi Start Phase
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
     // 4- Wi-Fi Connect Phase
     ESP_ERROR_CHECK(esp_wifi_connect());
     printf( "wifi_init_sta finished. SSID:%s\n",ssid);
