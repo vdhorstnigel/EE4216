@@ -10,9 +10,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "esp_sntp.h"
 
 using namespace who::frame_cap;
 using namespace who::app;
+
+SemaphoreHandle_t task_semaphore;
+static const char *TAG = "app_main";
 
 extern "C" void ntp_sync() {
     time_t now = 0;
@@ -46,6 +50,7 @@ extern "C" void ntp_sync() {
 
 extern "C" bool try_wifi_connect(int timeout_ms) {
     wifi_init();
+    bool WIFI_CONNECTED = false;
     int waited = 0;
     const int delay_step = 500; // ms
 
@@ -62,9 +67,7 @@ extern "C" void init(void *pvParameter) {
     bool wifi_ok = try_wifi_connect(10000);
     ESP_LOGI(TAG, "wifi_connected = %d", wifi_ok);
     if (wifi_ok) {
-        init_sntp();
-        wait_for_ntp_sync();
-        ESP_LOGI("TIME", "Epoch time: %lld", get_epoch_time());
+        ntp_sync();
     } else {
         ESP_LOGW(TAG, "WiFi not connected, going to offline mode.");
     }
@@ -80,6 +83,9 @@ extern "C" void init(void *pvParameter) {
 
 
 extern "C" void main_loop(void *pvParameter) {
+
+    auto frame_cap = get_dvp_frame_cap_pipeline();
+
     ESP_LOGI("main loop", "Waiting for init to complete...");
     xSemaphoreTake(task_semaphore, portMAX_DELAY);
 
@@ -87,7 +93,7 @@ extern "C" void main_loop(void *pvParameter) {
     recognition_app->run();
     // Register recognition event group for HTTP action control buttons
     recognition_register_event_group(recognition_app->get_recognition_event_group());
-    
+
 }
 
 extern "C" void app_main(void)
@@ -109,9 +115,6 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(bsp_leds_init());
     ESP_ERROR_CHECK(bsp_led_set(BSP_LED_GREEN, false));
 #endif
-
-    static const char *TAG = "app_main";
-
     // init all basic components for wifi
     ESP_LOGI(TAG, "[APP] Startup..");
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
@@ -120,13 +123,6 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    
-#if CONFIG_IDF_TARGET_ESP32S3
-    auto frame_cap = get_dvp_frame_cap_pipeline();
-#elif CONFIG_IDF_TARGET_ESP32P4
-    auto frame_cap = get_mipi_csi_frame_cap_pipeline();
-    // auto frame_cap = get_uvc_frame_cap_pipeline();
-#endif
 
     xTaskCreate(init, "init", 4096, NULL, 5, NULL);
     xTaskCreate(main_loop, "main_loop", 4096, NULL, 5, NULL);

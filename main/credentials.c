@@ -1,5 +1,5 @@
-const char* ssid = "GalaxyZH";
-const char* password =  "shqt4849";
+const char* ssid = "Namaste";
+const char* password =  "familysoo";
 
 const char* NUS_ssid = "NUS_STU";
 const char* NUS_identity = "";  

@@ -14,18 +14,8 @@ static const char *TAG = "http_stream";
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=frame";
 static const char *_STREAM_BOUNDARY = "\r\n--frame\r\n";
 static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
-// Track if a client is currently connected to /stream
-static volatile bool s_streaming_active = false;
-// Exported motion flag set by recognition app when a person is detected
-volatile bool g_motion_detected = false;
 
-bool http_streaming_active(void) {
-    return s_streaming_active;
-}
-
-// Simple accessors for motion flag (declared volatile for ISR/task safety; no heavy synchronization needed here)
-void http_motion_set_state(bool active) { g_motion_detected = active; }
-bool http_motion_get_state(void) { return g_motion_detected; }
+extern "C" bool net_send_telegram_rgb565_take(uint8_t *rgb565, size_t rgb565_len, uint16_t width, uint16_t height, uint8_t quality, const char *caption);
 
 static const char *INDEX_HTML =
     "<!doctype html><html><head><meta name=viewport content='width=device-width, initial-scale=1'/>"
@@ -128,10 +118,29 @@ static esp_err_t index_get_handler(httpd_req_t *req) {
 }
 
 static esp_err_t motion_get_handler(httpd_req_t *req) {
-    httpd_resp_set_type(req, "text/plain");
-    if (g_motion_detected) {
-        return httpd_resp_send(req, "detected", HTTPD_RESP_USE_STRLEN);
-    } else {
-        return httpd_resp_send(req, "idle", HTTPD_RESP_USE_STRLEN);
-    }
+    auto last_node = m_frame_cap->get_last_node();
+                if (last_node) {
+                    who::cam::cam_fb_t *fb = last_node->cam_fb_peek(-1);
+                    if (fb && fb->buf && fb->width && fb->height) {
+                        const size_t rgb_len = (size_t)fb->width * fb->height * 2;
+                        uint8_t *copy = (uint8_t *)heap_caps_malloc(rgb_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                        if (!copy) copy = (uint8_t *)malloc(rgb_len);
+                        if (copy) {
+                            memcpy(copy, fb->buf, rgb_len);
+                            char caption[64];
+                            strncpy(caption, "Motion Detected", sizeof(caption) - 1);
+                            caption[sizeof(caption) - 1] = '\0';
+                            if (net_send_telegram_rgb565_take(copy, rgb_len, fb->width, fb->height, 40, caption)) {
+                                m_last_send_tick = now;
+                            } else {
+                                // Fallback: free copy (since queue didn't take ownership)
+                                free(copy);
+                            }
+                        } else {
+                            ESP_LOGE("Detection", "Alloc snapshot buffer failed (%ux%u)", fb->width, fb->height);
+                        }
+                    }
+
+            }
+    return ESP_OK;
 }
