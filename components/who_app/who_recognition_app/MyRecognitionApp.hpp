@@ -12,12 +12,6 @@
 
 extern "C" bool http_streaming_active(void);
 
-extern "C" bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
-                                               uint16_t width,
-                                               uint16_t height,
-                                               uint8_t quality,
-                                               const char *caption);
-extern "C" bool post_plain_to_server(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
 // Async network sender enqueue APIs
 extern "C" bool net_send_http_plain_async(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
 extern "C" bool net_send_telegram_rgb565_take(uint8_t *rgb565, size_t rgb565_len, uint16_t width, uint16_t height, uint8_t quality, const char *caption);
@@ -114,16 +108,11 @@ protected:
                     int n = std::snprintf(body, sizeof(body), "authorized,%.2f", m_stable_sim);
                     if (n > 0) {
                         if (n >= (int)sizeof(body)) n = (int)sizeof(body) - 1;
-                        // Try async enqueue; fallback to synchronous if queue full
-                        if (!net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n)) {
-                            (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);
-                        }
+                        net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);
                     }
                 } else {
                     const char *body = "denied,0";
-                    if (!net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body))) {
-                        (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body));
-                    }
+                    net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body));
                 }
                 m_stable_sent = true;
                 m_last_stable_post_tick = now_tick;
@@ -136,7 +125,6 @@ protected:
             who::app::WhoRecognitionAppLCD::detect_result_cb(result);
         }
         const TickType_t one_sec = pdMS_TO_TICKS(1000);
-        const TickType_t min_send_interval = pdMS_TO_TICKS(30000); // cooldown between motion snapshots, put 30 seconds to prevent spams
         TickType_t now = xTaskGetTickCount();
         if (!result.det_res.empty()) {
             if (!m_detection_active) {

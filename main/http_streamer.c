@@ -105,8 +105,10 @@ httpd_handle_t start_webserver(void) {
     if (httpd_start(&server, &config) == ESP_OK) {
         httpd_uri_t index_uri  = {.uri="/", .method=HTTP_GET, .handler=index_get_handler, .user_ctx=NULL};
         httpd_uri_t stream_uri = {.uri="/stream", .method=HTTP_GET, .handler=stream_get_handler, .user_ctx=NULL};
+        httpd_uri_t motion_uri = {.uri="/motion", .method=HTTP_GET, .handler=stream_get_handler, .user_ctx=NULL};
         httpd_register_uri_handler(server, &index_uri);
         httpd_register_uri_handler(server, &stream_uri);
+        httpd_register_uri_handler(server, &motion_uri);
     } else {
         ESP_LOGE(TAG, "Failed starting HTTP server");
     }
