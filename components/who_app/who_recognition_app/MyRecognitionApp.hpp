@@ -11,6 +11,7 @@
 #include <cstdio>
 
 extern "C" bool http_streaming_active(void);
+extern "C" void http_motion_set_state(bool active);
 
 // Async network sender enqueue APIs
 extern "C" bool net_send_http_plain_async(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
@@ -121,96 +122,44 @@ protected:
     }
 
     void detect_result_cb(const who::detect::WhoDetect::result_t &result) override {
+        // Draw to LCD if enabled
         if (lcd_enabled()) {
             who::app::WhoRecognitionAppLCD::detect_result_cb(result);
         }
-        const TickType_t one_sec = pdMS_TO_TICKS(1000);
-        TickType_t now = xTaskGetTickCount();
+
+        const TickType_t now = xTaskGetTickCount();
+        const TickType_t snapshot_cooldown = pdMS_TO_TICKS(30000); // snapshot every 30s max
+
         if (!result.det_res.empty()) {
-            if (!m_detection_active) {
-                m_detection_active = true;
-                m_detection_start_tick = now;
-            }
-            m_last_detection_tick = now;
-            // If detection sustained for >= 1s, trigger recognition first
-            if (!m_recognition_pending && (now - m_detection_start_tick >= one_sec)) {
-                auto *rec_task = m_recognition->get_recognition_task();
-                if (rec_task && rec_task->is_active()) {
-                    xEventGroupSetBits(rec_task->get_event_group(), who::recognition::WhoRecognitionCore::RECOGNIZE);
-                    m_recognition_pending = true;
-                }
-            }
-            // Block snapshots while recognition is pending OR while detection is sustained (>=1s)
-            const bool recognition_window = m_recognition_pending || ((now - m_detection_start_tick) >= one_sec);
-            // Only consider snapshot outside recognition window and when cooldown elapsed
-            if (!recognition_window && (now - m_last_send_tick >= min_send_interval)) {
+            http_motion_set_state(true);
+            // Send snapshot if cooldown elapsed
+            if (now - m_last_send_tick >= snapshot_cooldown) {
                 auto last_node = m_frame_cap->get_last_node();
                 if (last_node) {
                     who::cam::cam_fb_t *fb = last_node->cam_fb_peek(-1);
                     if (fb && fb->buf && fb->width && fb->height) {
-                        ESP_LOGI("Detection", "Motion snapshot: queue send task");
                         const size_t rgb_len = (size_t)fb->width * fb->height * 2;
                         uint8_t *copy = (uint8_t *)heap_caps_malloc(rgb_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                        if (!copy) {
-                            copy = (uint8_t *)malloc(rgb_len);
-                        }
+                        if (!copy) copy = (uint8_t *)malloc(rgb_len);
                         if (copy) {
                             memcpy(copy, fb->buf, rgb_len);
-                            // Prepare context
-                            auto *ctx = (MotionSendCtx *)malloc(sizeof(MotionSendCtx));
-                            if (ctx) {
-                                ctx->rgb565 = copy;
-                                ctx->len = rgb_len;
-                                ctx->width = fb->width;
-                                ctx->height = fb->height;
-                                ctx->quality = 40;
-                                strncpy(ctx->caption, "Motion Detected", sizeof(ctx->caption) - 1);
-                                ctx->caption[sizeof(ctx->caption) - 1] = '\0';
-                                // Attempt async enqueue (takes ownership of RGB buffer); frees ctx.
-                                if (net_send_telegram_rgb565_take(copy, rgb_len, fb->width, fb->height, ctx->quality, ctx->caption)) {
-                                    m_last_send_tick = now;
-                                    free(ctx); // queue owns copy; free context only
-                                } else {
-                                    // Fallback: legacy dedicated task
-                                    const uint32_t stack_words = 6144; // ~24KB
-                                    BaseType_t ok = xTaskCreatePinnedToCore(&MyRecognitionApp::MotionSendTask,
-                                                                            "MotionSend",
-                                                                            stack_words,
-                                                                            (void *)ctx,
-                                                                            tskIDLE_PRIORITY,
-                                                                            nullptr,
-                                                                            0);
-                                    if (ok != pdPASS) {
-                                        size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-                                        size_t largest_int = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-                                        size_t free_all = xPortGetFreeHeapSize();
-                                        ESP_LOGE("Detection", "Failed to create MotionSend task (req stack %u bytes). Free int=%u, largest int=%u, free total=%u",
-                                                 (unsigned)(stack_words * sizeof(StackType_t)),
-                                                 (unsigned)free_int, (unsigned)largest_int, (unsigned)free_all);
-                                        free(copy);
-                                        free(ctx);
-                                    } else {
-                                        m_last_send_tick = now;
-                                    }
-                                }
+                            char caption[64];
+                            strncpy(caption, "Motion Detected", sizeof(caption) - 1);
+                            caption[sizeof(caption) - 1] = '\0';
+                            if (net_send_telegram_rgb565_take(copy, rgb_len, fb->width, fb->height, 40, caption)) {
+                                m_last_send_tick = now;
                             } else {
-                                ESP_LOGE("Detection", "Failed to alloc MotionSendCtx");
+                                // Fallback: free copy (since queue didn't take ownership)
                                 free(copy);
                             }
                         } else {
-                            ESP_LOGE("Detection", "Failed to alloc RGB565 copy (%ux%u)", fb->width, fb->height);
+                            ESP_LOGE("Detection", "Alloc snapshot buffer failed (%ux%u)", fb->width, fb->height);
                         }
                     }
                 }
             }
-            // (recognition gating handled above)
         } else {
-            // No detections in this frame; if it stays quiet for a short while, reset state
-            const TickType_t quiet_ms = pdMS_TO_TICKS(300);
-            if (m_detection_active && (now - m_last_detection_tick > quiet_ms)) {
-                m_detection_active = false;
-                m_detection_start_tick = 0;
-            }
+            http_motion_set_state(false);
         }
     }
 

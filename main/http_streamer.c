@@ -8,6 +8,7 @@
 // Forward declare local handlers used in URI registration
 static esp_err_t index_get_handler(httpd_req_t *req);
 static esp_err_t action_get_handler(httpd_req_t *req);
+static esp_err_t motion_get_handler(httpd_req_t *req);
 
 static const char *TAG = "http_stream";
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=frame";
@@ -15,10 +16,16 @@ static const char *_STREAM_BOUNDARY = "\r\n--frame\r\n";
 static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 // Track if a client is currently connected to /stream
 static volatile bool s_streaming_active = false;
+// Exported motion flag set by recognition app when a person is detected
+volatile bool g_motion_detected = false;
 
 bool http_streaming_active(void) {
     return s_streaming_active;
 }
+
+// Simple accessors for motion flag (declared volatile for ISR/task safety; no heavy synchronization needed here)
+void http_motion_set_state(bool active) { g_motion_detected = active; }
+bool http_motion_get_state(void) { return g_motion_detected; }
 
 static const char *INDEX_HTML =
     "<!doctype html><html><head><meta name=viewport content='width=device-width, initial-scale=1'/>"
@@ -104,8 +111,8 @@ httpd_handle_t start_webserver(void) {
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) == ESP_OK) {
         httpd_uri_t index_uri  = {.uri="/", .method=HTTP_GET, .handler=index_get_handler, .user_ctx=NULL};
-        httpd_uri_t stream_uri = {.uri="/stream", .method=HTTP_GET, .handler=stream_get_handler, .user_ctx=NULL};
-        httpd_uri_t motion_uri = {.uri="/motion", .method=HTTP_GET, .handler=stream_get_handler, .user_ctx=NULL};
+    httpd_uri_t stream_uri = {.uri="/stream", .method=HTTP_GET, .handler=stream_get_handler, .user_ctx=NULL};
+    httpd_uri_t motion_uri = {.uri="/motion", .method=HTTP_GET, .handler=motion_get_handler, .user_ctx=NULL};
         httpd_register_uri_handler(server, &index_uri);
         httpd_register_uri_handler(server, &stream_uri);
         httpd_register_uri_handler(server, &motion_uri);
@@ -118,4 +125,13 @@ httpd_handle_t start_webserver(void) {
 static esp_err_t index_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, INDEX_HTML, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t motion_get_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/plain");
+    if (g_motion_detected) {
+        return httpd_resp_send(req, "detected", HTTPD_RESP_USE_STRLEN);
+    } else {
+        return httpd_resp_send(req, "idle", HTTPD_RESP_USE_STRLEN);
+    }
 }
