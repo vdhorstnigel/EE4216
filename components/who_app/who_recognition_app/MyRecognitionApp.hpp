@@ -17,8 +17,10 @@ extern "C" bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
                                                uint16_t height,
                                                uint8_t quality,
                                                const char *caption);
-//extern "C" bool send_json_over_tcp(const char *ip, uint16_t port, const char *json, size_t len);
 extern "C" bool post_plain_to_server(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
+// Async network sender enqueue APIs
+extern "C" bool net_send_http_plain_async(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
+extern "C" bool net_send_telegram_rgb565_take(uint8_t *rgb565, size_t rgb565_len, uint16_t width, uint16_t height, uint8_t quality, const char *caption);
 
 class MyRecognitionApp : public who::app::WhoRecognitionAppLCD {
 public:
@@ -112,11 +114,16 @@ protected:
                     int n = std::snprintf(body, sizeof(body), "authorized,%.2f", m_stable_sim);
                     if (n > 0) {
                         if (n >= (int)sizeof(body)) n = (int)sizeof(body) - 1;
-                        (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);
+                        // Try async enqueue; fallback to synchronous if queue full
+                        if (!net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n)) {
+                            (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);
+                        }
                     }
                 } else {
                     const char *body = "denied,0";
-                    (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body));
+                    if (!net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body))) {
+                        (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body));
+                    }
                 }
                 m_stable_sent = true;
                 m_last_stable_post_tick = now_tick;
@@ -171,27 +178,32 @@ protected:
                                 ctx->quality = 40;
                                 strncpy(ctx->caption, "Motion Detected", sizeof(ctx->caption) - 1);
                                 ctx->caption[sizeof(ctx->caption) - 1] = '\0';
-                                // TLS handshake (mbedTLS) can use a deep call stack; keep reasonably large but not excessive
-                                // to avoid internal RAM exhaustion on task creation. 6144 words ~= 24 KB stack.
-                                const uint32_t stack_words = 6144; // words (x4 bytes) => ~24KB
-                                BaseType_t ok = xTaskCreatePinnedToCore(&MyRecognitionApp::MotionSendTask,
-                                                                        "MotionSend",
-                                                                        stack_words,
-                                                                        (void *)ctx,
-                                                                        tskIDLE_PRIORITY, // keep lowest priority so detection/recognition win
-                                                                        nullptr,
-                                                                        0);
-                                if (ok != pdPASS) {
-                                    size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-                                    size_t largest_int = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-                                    size_t free_all = xPortGetFreeHeapSize();
-                                    ESP_LOGE("Detection", "Failed to create MotionSend task (req stack %u bytes). Free int=%u, largest int=%u, free total=%u",
-                                             (unsigned)(stack_words * sizeof(StackType_t)),
-                                             (unsigned)free_int, (unsigned)largest_int, (unsigned)free_all);
-                                    free(copy);
-                                    free(ctx);
-                                } else {
+                                // Attempt async enqueue (takes ownership of RGB buffer); frees ctx.
+                                if (net_send_telegram_rgb565_take(copy, rgb_len, fb->width, fb->height, ctx->quality, ctx->caption)) {
                                     m_last_send_tick = now;
+                                    free(ctx); // queue owns copy; free context only
+                                } else {
+                                    // Fallback: legacy dedicated task
+                                    const uint32_t stack_words = 6144; // ~24KB
+                                    BaseType_t ok = xTaskCreatePinnedToCore(&MyRecognitionApp::MotionSendTask,
+                                                                            "MotionSend",
+                                                                            stack_words,
+                                                                            (void *)ctx,
+                                                                            tskIDLE_PRIORITY,
+                                                                            nullptr,
+                                                                            0);
+                                    if (ok != pdPASS) {
+                                        size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+                                        size_t largest_int = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+                                        size_t free_all = xPortGetFreeHeapSize();
+                                        ESP_LOGE("Detection", "Failed to create MotionSend task (req stack %u bytes). Free int=%u, largest int=%u, free total=%u",
+                                                 (unsigned)(stack_words * sizeof(StackType_t)),
+                                                 (unsigned)free_int, (unsigned)largest_int, (unsigned)free_all);
+                                        free(copy);
+                                        free(ctx);
+                                    } else {
+                                        m_last_send_tick = now;
+                                    }
                                 }
                             } else {
                                 ESP_LOGE("Detection", "Failed to alloc MotionSendCtx");

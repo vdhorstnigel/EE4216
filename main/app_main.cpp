@@ -7,6 +7,7 @@
 #include "MyRecognitionApp.hpp"
 #include "recognition_control.h"
 #include "time_sync.h"
+#include "net_sender.h"
 
 using namespace who::frame_cap;
 using namespace who::app;
@@ -45,6 +46,9 @@ extern "C" void app_main(void)
     app_sntp_init();
     // Block until time is synced before launching features that need TLS
     (void)time_sync_block_until_synced(20000);
+
+    // Start asynchronous network sender (pinned to core 1 by default)
+    (void)net_sender_start(1);
 
     vTaskDelay(pdMS_TO_TICKS(1000));
     start_webserver();
