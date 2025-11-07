@@ -126,37 +126,9 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
         }
     }
 
-    // 2) Fallback: use ESP certificate bundle (covers multiple CAs across CDNs)
-    if (client == NULL) {
-        esp_http_client_config_t cfg_bundle = {
-            .url = url,
-            .crt_bundle_attach = esp_crt_bundle_attach,
-            .timeout_ms = 30000,
-            .transport_type = HTTP_TRANSPORT_OVER_SSL,
-            .keep_alive_enable = false,
-            .buffer_size_tx = 1024,
-            .buffer_size = 1024,
-        };
-        client = esp_http_client_init(&cfg_bundle);
-        if (client) {
-            setup_http_client(client, ctype);
-            for (int attempt = 1; attempt <= max_attempts; ++attempt) {
-                err = esp_http_client_open(client, content_length);
-                if (err == ESP_OK) break;
-                ESP_LOGW(TAG, "http_open (bundle) attempt %d/%d failed: %s", attempt, max_attempts, esp_err_to_name(err));
-                vTaskDelay(pdMS_TO_TICKS(500 * attempt));
-            }
-            if (err != ESP_OK) {
-                esp_http_client_close(client);
-                esp_http_client_cleanup(client);
-                client = NULL;
-            }
-        }
-    }
 
-    // If all connection attempts failed, bail out gracefully
     if (client == NULL) {
-        ESP_LOGE(TAG, "No HTTP client connection available after pinned+bundle attempts; aborting send");
+        ESP_LOGE(TAG, "No HTTP client connection available, aborting send");
         return false;
     }
 

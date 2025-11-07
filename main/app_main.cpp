@@ -31,6 +31,7 @@ extern "C" void app_main(void)
 
     static const char *TAG = "app_main";
 
+    // init all basic components for wifi
     ESP_LOGI(TAG, "[APP] Startup..");
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
@@ -39,12 +40,13 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    // init wifi with static ip
     wifi_init();
     app_sntp_init();
-    // Block until time is synced (or 20s timeout) before launching features that need DNS/TLS
+    // Block until time is synced before launching features that need TLS
     (void)time_sync_block_until_synced(20000);
 
-    vTaskDelay(pdMS_TO_TICKS(1000)); // brief settle
+    vTaskDelay(pdMS_TO_TICKS(1000));
     start_webserver();
 #if CONFIG_IDF_TARGET_ESP32S3
     auto frame_cap = get_dvp_frame_cap_pipeline();

@@ -15,13 +15,8 @@ bool post_plain_to_server(const char *ip,
     if (!ip || !path || !body || len == 0) return false;
 
     char url[192];
-    // Ensure path starts with '/'
     const char *p = path;
     char path_buf[96];
-    if (path[0] != '/') {
-        snprintf(path_buf, sizeof(path_buf), "/%s", path);
-        p = path_buf;
-    }
     snprintf(url, sizeof(url), "http://%s:%u%s", ip, (unsigned)port, p);
 
     esp_http_client_config_t cfg = {

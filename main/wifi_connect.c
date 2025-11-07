@@ -40,34 +40,31 @@ else if (event_id == IP_EVENT_STA_GOT_IP)
 
 void wifi_init()
 {
-  // Create default STA netif and keep the handle so we can set static IP
   esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();  
   wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
   esp_wifi_set_ps(WIFI_PS_NONE);
   ESP_ERROR_CHECK(esp_wifi_init(&wifi_initiation)); //     
   ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
   ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
-  // Explicitly zero memory to avoid missing-field initializer warnings treated as errors
+
   wifi_config_t wifi_configuration; 
   memset(&wifi_configuration, 0, sizeof(wifi_configuration));
   wifi_configuration.sta.pmf_cfg.capable = true;
   wifi_configuration.sta.pmf_cfg.required = false;
 
-    // Configure static IPv4 for the STA interface
+  // Configure static IPv4 for the STA interface
   esp_netif_ip_info_t ip_info;
   ip_info.ip.addr = PP_HTONL(LWIP_MAKEU32(10,117,110,15));
   ip_info.gw.addr = PP_HTONL(LWIP_MAKEU32(10,117,110,197));
   ip_info.netmask.addr = PP_HTONL(LWIP_MAKEU32(255,255,255,0));
 
-    // Stop DHCP client and apply the static IP settings before connecting
-    esp_err_t dhcp_stop_err = esp_netif_dhcpc_stop(sta_netif);
-    if (dhcp_stop_err != ESP_OK && dhcp_stop_err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
-        ESP_LOGW("wifi_init", "DHCP stop failed: %s", esp_err_to_name(dhcp_stop_err));
-    }
+  // Stop DHCP client and apply the static IP settings before connecting
+  esp_err_t dhcp_stop_err = esp_netif_dhcpc_stop(sta_netif);
+  if (dhcp_stop_err != ESP_OK && dhcp_stop_err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+      ESP_LOGW("wifi_init", "DHCP stop failed: %s", esp_err_to_name(dhcp_stop_err));
+  }
   ESP_ERROR_CHECK(esp_netif_set_ip_info(sta_netif, &ip_info));
 
-  // Configure primary DNS (Google 8.8.8.8) so hostname resolution works with static IP
-  // Simple DNS: Use gateway as DNS; comment out if DHCP supplies DNS or if not needed
   esp_netif_dns_info_t dns0; memset(&dns0, 0, sizeof(dns0));
   dns0.ip.u_addr.ip4.addr = ip_info.gw.addr; // gateway
   ESP_ERROR_CHECK(esp_netif_set_dns_info(sta_netif, ESP_NETIF_DNS_MAIN, &dns0));

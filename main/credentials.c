@@ -2,9 +2,9 @@ const char* ssid = "GalaxyZH";
 const char* password =  "shqt4849";
 
 const char* NUS_ssid = "NUS_STU";
-const char* NUS_identity = "e0959043";  
-const char* NUS_username = "e0959043";  
-const char* NUS_password = "Password1234@";
+const char* NUS_identity = "";  
+const char* NUS_username = "";  
+const char* NUS_password = "";
 
 const char* Telegram_Bot_Token = "8508403841:AAHozwJTKtDI7qsZwpI2k4GbfD3dntZ3T5U";
 const char* Telegram_Chat_ID = "-1003208366727";

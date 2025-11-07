@@ -39,19 +39,17 @@ public:
     }
 
 protected:
-    // Recognition result from core
     void recognition_result_cb(const std::string &result) override {
-        // Optional LCD overlay (enabled only when not streaming to avoid SPI/CPU contention)
+        // disable LCD if needed
         if (lcd_enabled()) {
             who::app::WhoRecognitionAppLCD::recognition_result_cb(result);
         }
-        // allow next trigger
         m_recognition_pending = false;
         ESP_LOGI("Recognition", "%s", result.c_str());
         const TickType_t one_sec = pdMS_TO_TICKS(1000);
         TickType_t now_tick = xTaskGetTickCount();
 
-        // Parse current outcome into (known,id,sim)
+        // Parse results for id and sim 
         bool cur_known = false;
         int cur_id = -1;
         float cur_sim = 0.0f;
@@ -62,7 +60,7 @@ protected:
                 cur_id = id;
                 cur_sim = sim;
             } else {
-                return; // malformed, ignore
+                return; // ignore other messages
             }
         } else if (result.find("who?") != std::string::npos) {
             cur_known = false;
@@ -72,11 +70,11 @@ protected:
             return; // ignore other messages
         }
 
-        // Reset detection gating since recognition concluded
+        // Reset detection 
         m_detection_active = false;
         m_detection_start_tick = 0;
 
-        // Stability gate: require same outcome for >= 1s before posting
+        // Require same outcome for 1s before posting
         if (m_stable_first) {
             m_stable_first = false;
             m_stable_known = cur_known;
@@ -88,8 +86,8 @@ protected:
             return;
         }
 
+        // Different outcome: reset stability timer
         if (m_stable_known != cur_known || m_stable_id != cur_id) {
-            // Outcome changed, restart window
             m_stable_known = cur_known;
             m_stable_id = cur_id;
             m_stable_sim = cur_sim;
@@ -99,12 +97,12 @@ protected:
             return;
         }
 
-        // Same outcome: update sim (for known) and check stability + periodic resend
+        // Same outcome: send post
         m_stable_sim = cur_sim;
         if (now_tick - m_stable_start_tick >= one_sec) {
             bool should_send = false;
             if (!m_stable_sent) {
-                should_send = true; // first send after stability reached
+                should_send = true; // first send after stable
             } else if (now_tick - m_last_stable_post_tick >= pdMS_TO_TICKS(10000)) {
                 should_send = true; // periodic resend every 10s while stable
             }
@@ -126,9 +124,7 @@ protected:
         }
     }
 
-    // Detection results (bounding boxes, etc.)
     void detect_result_cb(const who::detect::WhoDetect::result_t &result) override {
-        // Optional LCD overlay (enabled only when not streaming to avoid SPI/CPU contention)
         if (lcd_enabled()) {
             who::app::WhoRecognitionAppLCD::detect_result_cb(result);
         }
@@ -228,12 +224,12 @@ protected:
     }
 
 private:
-    // Decide dynamically if LCD overlays should be enabled
+    // LCD enabled
     static inline bool lcd_enabled() {
         return true;
         //return !http_streaming_active() && !s_sending_snapshot;
     }
-    // Context and task to send snapshot without using Detect task stack
+
     struct MotionSendCtx {
         uint8_t *rgb565;
         size_t len;
@@ -243,11 +239,11 @@ private:
         char caption[64];
     };
 
+    // send snapshot over tcp when motion detected
     static void MotionSendTask(void *arg) {
         MotionSendCtx *ctx = (MotionSendCtx *)arg;
         if (ctx) {
-            // Yield once so critical tasks can run
-            vTaskDelay(1);
+            vTaskDelay(100);
             s_sending_snapshot = true;
             UBaseType_t hw_before = uxTaskGetStackHighWaterMark(nullptr);
             ESP_LOGI("MotionSend", "Sending snapshot to Telegram (%ux%u)", ctx->width, ctx->height);
