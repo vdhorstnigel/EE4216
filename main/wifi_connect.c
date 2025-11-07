@@ -47,8 +47,9 @@ void wifi_init()
   ESP_ERROR_CHECK(esp_wifi_init(&wifi_initiation)); //     
   ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
   ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
-  // Zero-initialize wifi configuration then set fields explicitly to avoid missing-field warnings
-  wifi_config_t wifi_configuration = {0};
+  // Explicitly zero memory to avoid missing-field initializer warnings treated as errors
+  wifi_config_t wifi_configuration; 
+  memset(&wifi_configuration, 0, sizeof(wifi_configuration));
   wifi_configuration.sta.pmf_cfg.capable = true;
   wifi_configuration.sta.pmf_cfg.required = false;
 
@@ -64,6 +65,12 @@ void wifi_init()
         ESP_LOGW("wifi_init", "DHCP stop failed: %s", esp_err_to_name(dhcp_stop_err));
     }
   ESP_ERROR_CHECK(esp_netif_set_ip_info(sta_netif, &ip_info));
+
+  // Configure primary DNS (Google 8.8.8.8) so hostname resolution works with static IP
+  // Simple DNS: Use gateway as DNS; comment out if DHCP supplies DNS or if not needed
+  esp_netif_dns_info_t dns0; memset(&dns0, 0, sizeof(dns0));
+  dns0.ip.u_addr.ip4.addr = ip_info.gw.addr; // gateway
+  ESP_ERROR_CHECK(esp_netif_set_dns_info(sta_netif, ESP_NETIF_DNS_MAIN, &dns0));
 
   strncpy((char*)wifi_configuration.sta.ssid, ssid, sizeof(wifi_configuration.sta.ssid)-1);
   strncpy((char*)wifi_configuration.sta.password, password, sizeof(wifi_configuration.sta.password)-1);  
@@ -86,7 +93,8 @@ void nus_wifi_init()
   ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
   ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
   // Zero-initialize to avoid missing-field warnings
-  wifi_config_t wifi_configuration = {0};
+  wifi_config_t wifi_configuration; 
+  memset(&wifi_configuration, 0, sizeof(wifi_configuration));
   wifi_configuration.sta.pmf_cfg.capable = true;
   wifi_configuration.sta.pmf_cfg.required = false;
   strncpy((char*)wifi_configuration.sta.ssid, NUS_ssid, sizeof(wifi_configuration.sta.ssid)-1);

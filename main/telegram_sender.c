@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include "time_sync.h"
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "lwip/inet.h"
@@ -90,17 +91,12 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
     esp_err_t err = ESP_FAIL;
     const int max_attempts = 3;
 
-    // Wait briefly for SNTP time to be set so TLS validation is reliable
-    {
-        const time_t cutoff = 1609459200; // 2021-01-01
-        const uint32_t max_wait_ms = 10000;
-        uint32_t waited = 0;
-        while (time(NULL) < cutoff && waited < max_wait_ms) {
-            vTaskDelay(pdMS_TO_TICKS(250));
-            waited += 250;
-        }
-        if (waited >= max_wait_ms) {
-            ESP_LOGW(TAG, "Time not synced yet; attempting TLS anyway");
+    // Ensure time is synced (block up to 15s); if not, abort early instead of wasting TLS attempts
+    if (!time_is_synced()) {
+        app_sntp_init(); // safe multi-call
+        if (!time_sync_block_until_synced(15000)) {
+            ESP_LOGW(TAG, "Time not synced after wait; deferring Telegram send");
+            return false;
         }
     }
 

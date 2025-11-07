@@ -41,8 +41,10 @@ extern "C" void app_main(void)
 
     wifi_init();
     app_sntp_init();
+    // Block until time is synced (or 20s timeout) before launching features that need DNS/TLS
+    (void)time_sync_block_until_synced(20000);
 
-    vTaskDelay(pdMS_TO_TICKS(5000)); // wait for wifi connection
+    vTaskDelay(pdMS_TO_TICKS(1000)); // brief settle
     start_webserver();
 #if CONFIG_IDF_TARGET_ESP32S3
     auto frame_cap = get_dvp_frame_cap_pipeline();
