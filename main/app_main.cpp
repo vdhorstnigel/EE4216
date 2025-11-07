@@ -48,29 +48,11 @@ extern "C" void ntp_sync() {
     ESP_LOGE("SNTP", "Failed to synchronize time after 40s.");
 }
 
-extern "C" bool try_wifi_connect(int timeout_ms) {
-    wifi_init();
-    bool WIFI_CONNECTED = false;
-    int waited = 0;
-    const int delay_step = 500; // ms
-
-    while (!WIFI_CONNECTED && waited < timeout_ms) {
-        vTaskDelay(pdMS_TO_TICKS(delay_step));
-        waited += delay_step;
-    }
-
-    return WIFI_CONNECTED;
-}
-
 extern "C" void init(void *pvParameter) {
 
-    bool wifi_ok = try_wifi_connect(10000);
-    ESP_LOGI(TAG, "wifi_connected = %d", wifi_ok);
-    if (wifi_ok) {
-        ntp_sync();
-    } else {
-        ESP_LOGW(TAG, "WiFi not connected, going to offline mode.");
-    }
+    wifi_init();
+    vTaskDelay(pdMS_TO_TICKS(2000)); // wait for wifi to settle
+    ntp_sync();
 
     // Start asynchronous network sender (pinned to core 1)
     (void)net_sender_start(1);
@@ -95,8 +77,6 @@ extern "C" void main_loop(void *pvParameter) {
 
     auto recognition_app = new MyRecognitionApp(frame_cap);
     recognition_app->run();
-    // Register recognition event group for HTTP action control buttons
-    recognition_register_event_group(recognition_app->get_recognition_event_group());
 }
 
 extern "C" void app_main(void)

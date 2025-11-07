@@ -121,12 +121,6 @@ static esp_err_t index_get_handler(httpd_req_t *req) {
     return httpd_resp_send(req, INDEX_HTML, HTTPD_RESP_USE_STRLEN);
 }
 
-// Simple action handler placeholder (extend with query parsing as needed)
-static esp_err_t action_get_handler(httpd_req_t *req) {
-    httpd_resp_set_type(req, "text/plain");
-    httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
 
 static esp_err_t motion_get_handler(httpd_req_t *req) {
     // Capture a single frame and enqueue for Telegram send (RGB565 expected)
@@ -175,5 +169,3 @@ static esp_err_t motion_get_handler(httpd_req_t *req) {
     httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
-
-bool http_streaming_active(void) { return s_streaming_active; }
