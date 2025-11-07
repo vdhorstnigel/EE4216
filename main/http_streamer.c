@@ -11,13 +11,16 @@
 
 // Forward declare local handlers used in URI registration
 static esp_err_t index_get_handler(httpd_req_t *req);
-static esp_err_t action_get_handler(httpd_req_t *req);
 static esp_err_t motion_get_handler(httpd_req_t *req);
 
 static const char *TAG = "http_stream";
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=frame";
 static const char *_STREAM_BOUNDARY = "\r\n--frame\r\n";
 static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
+
+// Global shared frame
+static camera_fb_t *latest_fb = NULL;
+static SemaphoreHandle_t fb_mutex;
 
 static volatile bool s_streaming_active = false;
 
@@ -56,6 +59,13 @@ static esp_err_t stream_get_handler(httpd_req_t *req) {
             break;
         }
 
+        if (xSemaphoreTake(fb_mutex, portMAX_DELAY)) {
+            if (latest_fb) esp_camera_fb_return(latest_fb);
+            latest_fb = fb;
+            xSemaphoreGive(fb_mutex);
+        }
+
+
         esp_err_t res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
         if (res != ESP_OK) {
             esp_camera_fb_return(fb);
@@ -70,8 +80,6 @@ static esp_err_t stream_get_handler(httpd_req_t *req) {
                 break;
             }
         } else {
-            // Convert on the fly and stream via callback to avoid big allocs
-            // Simpler: encode to full buffer to know length (small quality to keep CPU/memory low)
             uint8_t *jpg_buf = NULL; size_t jpg_len = 0;
             bool ok = frame2jpg(fb, 60, &jpg_buf, &jpg_len);
             if (!ok || !jpg_buf) {
@@ -105,8 +113,8 @@ httpd_handle_t start_webserver(void) {
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) == ESP_OK) {
         httpd_uri_t index_uri  = {.uri="/", .method=HTTP_GET, .handler=index_get_handler, .user_ctx=NULL};
-    httpd_uri_t stream_uri = {.uri="/stream", .method=HTTP_GET, .handler=stream_get_handler, .user_ctx=NULL};
-    httpd_uri_t motion_uri = {.uri="/motion", .method=HTTP_GET, .handler=motion_get_handler, .user_ctx=NULL};
+        httpd_uri_t stream_uri = {.uri="/stream", .method=HTTP_GET, .handler=stream_get_handler, .user_ctx=NULL};
+        httpd_uri_t motion_uri = {.uri="/motion", .method=HTTP_GET, .handler=motion_get_handler, .user_ctx=NULL};
         httpd_register_uri_handler(server, &index_uri);
         httpd_register_uri_handler(server, &stream_uri);
         httpd_register_uri_handler(server, &motion_uri);
@@ -123,39 +131,42 @@ static esp_err_t index_get_handler(httpd_req_t *req) {
 
 
 static esp_err_t motion_get_handler(httpd_req_t *req) {
-    // Capture a single frame and enqueue for Telegram send (RGB565 expected)
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "fb failed");
-        return ESP_FAIL;
+    camera_fb_t *fb_copy = NULL;
+    if (xSemaphoreTake(fb_mutex, pdMS_TO_TICKS(100))) {
+        if (latest_fb) {
+            fb_copy = latest_fb;
+        }
+        xSemaphoreGive(fb_mutex);
+    }
+    if (!fb_copy) {
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no frame available");
+    return ESP_FAIL;
     }
     // If JPEG, convert to RGB565
     uint8_t *rgb565_buf = NULL;
     size_t rgb565_len = 0;
-    uint16_t width = fb->width;
-    uint16_t height = fb->height;
-    if (fb->format == PIXFORMAT_RGB565) {
-        rgb565_len = fb->len;
+    uint16_t width = fb_copy->width;
+    uint16_t height = fb_copy->height;
+    if (fb_copy->format == PIXFORMAT_RGB565) {
+        rgb565_len = fb_copy->len;
         rgb565_buf = (uint8_t *)malloc(rgb565_len);
-        if (rgb565_buf) memcpy(rgb565_buf, fb->buf, rgb565_len);
+        if (rgb565_buf) memcpy(rgb565_buf, fb_copy->buf, rgb565_len);
     } else {
         rgb565_len = (size_t)width * height * 2;
         rgb565_buf = (uint8_t *)malloc(rgb565_len);
         if (rgb565_buf) {
-            // Use jpeg decoder helper when source is JPEG, otherwise copy unsupported formats fail
-            if (fb->format == PIXFORMAT_JPEG) {
-                if (!jpg2rgb565(fb->buf, fb->len, rgb565_buf, JPG_SCALE_NONE)) {
+            if (fb_copy->format == PIXFORMAT_JPEG) {
+                if (!jpg2rgb565(fb_copy->buf, fb_copy->len, rgb565_buf, JPG_SCALE_NONE)) {
                     free(rgb565_buf);
                     rgb565_buf = NULL;
                 }
             } else {
-                // For other raw formats (e.g. YUV) a dedicated converter would be needed; fallback to failure
                 free(rgb565_buf);
                 rgb565_buf = NULL;
             }
         }
     }
-    esp_camera_fb_return(fb);
+    esp_camera_fb_return(fb_copy);
     if (!rgb565_buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "convert failed");
         return ESP_FAIL;

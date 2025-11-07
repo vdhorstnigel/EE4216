@@ -2,7 +2,7 @@
 #include "who_recognition_app_lcd.hpp"
 #include "who_recognition_app_term.hpp"
 #include "who_spiflash_fatfs.hpp"
-#include "wifi_connect.c"
+#include "wifi_connect.h"
 #include "http_streamer.h"
 #include "MyRecognitionApp.hpp"
 #include "recognition_control.h"
@@ -11,6 +11,9 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_sntp.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
 
 using namespace who::frame_cap;
 using namespace who::app;
@@ -63,22 +66,6 @@ extern "C" void init(void *pvParameter) {
     vTaskDelete(NULL);
 }
 
-
-extern "C" void main_loop(void *pvParameter) {
-    ESP_LOGI("main loop", "Waiting for init to complete...");
-    xSemaphoreTake(task_semaphore, portMAX_DELAY);
-
-    auto frame_cap = static_cast<who::frame_cap::WhoFrameCap *>(pvParameter);
-    if (!frame_cap) {
-        ESP_LOGE("main loop", "frame_cap pointer is null");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    auto recognition_app = new MyRecognitionApp(frame_cap);
-    recognition_app->run();
-}
-
 extern "C" void app_main(void)
 {
     task_semaphore = xSemaphoreCreateBinary();
@@ -107,18 +94,12 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // Create frame capture pipeline instance before starting tasks so we can pass it
-    who::frame_cap::WhoFrameCap *frame_cap_ptr = nullptr;
-#if CONFIG_IDF_TARGET_ESP32S3
-    frame_cap_ptr = get_dvp_frame_cap_pipeline();
-#elif CONFIG_IDF_TARGET_ESP32P4
-    frame_cap_ptr = get_mipi_csi_frame_cap_pipeline();
-    // frame_cap_ptr = get_uvc_frame_cap_pipeline();
-#endif
-    if (!frame_cap_ptr) {
-        ESP_LOGE(TAG, "Failed to initialize frame capture pipeline");
-    }
-
     xTaskCreate(init, "init", 4096, NULL, 5, NULL);
-    xTaskCreate(main_loop, "main_loop", 4096, frame_cap_ptr, 5, NULL);
+
+    xSemaphoreTake(task_semaphore, portMAX_DELAY);
+
+    auto frame_cap = get_dvp_frame_cap_pipeline();
+
+    auto recognition_app = new MyRecognitionApp(frame_cap);
+    recognition_app->run();
 }

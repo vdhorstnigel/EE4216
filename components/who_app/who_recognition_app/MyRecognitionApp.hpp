@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include "credentials.h"
 
 // Async network sender enqueue APIs
 extern "C" bool net_send_http_plain_async(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
