@@ -61,6 +61,7 @@ extern "C" void init(void *pvParameter) {
     (void)net_sender_start(1);
 
     start_webserver();
+    start_motion();
 
     xSemaphoreGive(task_semaphore);
     vTaskDelete(NULL);

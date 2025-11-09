@@ -111,9 +111,22 @@ httpd_handle_t start_webserver(void) {
     if (httpd_start(&server, &config) == ESP_OK) {
         httpd_uri_t index_uri  = {.uri="/", .method=HTTP_GET, .handler=index_get_handler, .user_ctx=NULL};
         httpd_uri_t stream_uri = {.uri="/stream", .method=HTTP_GET, .handler=stream_get_handler, .user_ctx=NULL};
-        httpd_uri_t motion_uri = {.uri="/motion", .method=HTTP_GET, .handler=motion_get_handler, .user_ctx=NULL};
         httpd_register_uri_handler(server, &index_uri);
         httpd_register_uri_handler(server, &stream_uri);
+    } else {
+        ESP_LOGE(TAG, "Failed starting HTTP server");
+    }
+    return server;
+}
+
+httpd_handle_t start_motion(void) {
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 8080;
+    config.ctrl_port = 32769;
+    config.lru_purge_enable = true;
+    httpd_handle_t server = NULL;
+    if (httpd_start(&server, &config) == ESP_OK) {
+        httpd_uri_t motion_uri = {.uri="/motion", .method=HTTP_GET, .handler=motion_get_handler, .user_ctx=NULL};
         httpd_register_uri_handler(server, &motion_uri);
     } else {
         ESP_LOGE(TAG, "Failed starting HTTP server");
