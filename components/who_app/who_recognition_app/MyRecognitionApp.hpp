@@ -30,11 +30,7 @@ public:
 
 protected:
     void recognition_result_cb(const std::string &result) override {
-        // disable LCD if needed
-        if (lcd_enabled()) {
-            who::app::WhoRecognitionAppLCD::recognition_result_cb(result);
-        }
-
+        who::app::WhoRecognitionAppLCD::recognition_result_cb(result);
         ESP_LOGI("Recognition", "%s", result.c_str());
         const TickType_t one_sec = pdMS_TO_TICKS(1000);
         TickType_t now_tick = xTaskGetTickCount();
@@ -60,6 +56,7 @@ protected:
             m_stable_first = false;
             m_stable_known = cur_known;
             m_stable_id = cur_id;
+            m_stable_sim = cur_sim;
             m_stable_start_tick = now_tick;
             m_stable_sent = false;
             m_last_stable_post_tick = 0;
@@ -86,6 +83,7 @@ protected:
                 should_send = true; // periodic resend every 5s while stable
             }
             if (should_send) {
+                ESP_LOGI("Recognition", "Sending Results now: %s", result.c_str());
                 if (m_stable_known) {
                     char body[64];
                     int n = std::snprintf(body, sizeof(body), "authorized,%.2f", m_stable_sim);
@@ -104,9 +102,10 @@ protected:
     }
 
     void detect_result_cb(const who::detect::WhoDetect::result_t &result) override {
-        // Draw to LCD if enabled
-        if (lcd_enabled()) {
-            who::app::WhoRecognitionAppLCD::detect_result_cb(result);
+        who::app::WhoRecognitionAppLCD::detect_result_cb(result);
+        if (!result.det_res.empty()) {
+            auto *rec_task = m_recognition->get_recognition_task();
+            xEventGroupSetBits(rec_task->get_event_group(), who::recognition::WhoRecognitionCore::RECOGNIZE);
         }
     }
 
@@ -119,14 +118,6 @@ protected:
     }
 
 private:
-    // LCD enabled
-    static inline bool lcd_enabled() {
-        return true;
-        //return !http_streaming_active() && !s_sending_snapshot;
-    }
-
-    // LCD drawing is dynamically gated via lcd_enabled()
-
     // Recognition stability gating
     bool m_stable_first {true};
     bool m_stable_known {false};

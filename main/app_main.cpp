@@ -102,5 +102,7 @@ extern "C" void app_main(void)
     auto frame_cap = get_dvp_frame_cap_pipeline();
 
     auto recognition_app = new MyRecognitionApp(frame_cap);
+    recognition_register_event_group(recognition_app->get_recognition_event_group());
+
     recognition_app->run();
 }
