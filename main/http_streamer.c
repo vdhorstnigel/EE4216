@@ -2,23 +2,32 @@
 #include "esp_camera.h"
 #include "esp_log.h"
 #include <string.h>
+#include <stdbool.h>
+#include <stdlib.h>
 #include "img_converters.h"
 #include "recognition_control.h"
+#include "net_sender.h"
+#include "http_streamer.h"
 
 // Forward declare local handlers used in URI registration
 static esp_err_t index_get_handler(httpd_req_t *req);
-static esp_err_t action_get_handler(httpd_req_t *req);
+static esp_err_t motion_get_handler(httpd_req_t *req);
 
 static const char *TAG = "http_stream";
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=frame";
 static const char *_STREAM_BOUNDARY = "\r\n--frame\r\n";
 static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
-// Track if a client is currently connected to /stream
+
 static volatile bool s_streaming_active = false;
 
-bool http_streaming_active(void) {
-    return s_streaming_active;
-}
+struct MotionCtx {
+    uint8_t *rgb565;
+    size_t len;
+    uint16_t width;
+    uint16_t height;
+    uint8_t quality;
+    char caption[64];
+};
 
 static const char *INDEX_HTML =
     "<!doctype html><html><head><meta name=viewport content='width=device-width, initial-scale=1'/>"
@@ -54,7 +63,6 @@ static esp_err_t stream_get_handler(httpd_req_t *req) {
             ESP_LOGW(TAG, "stream: fb_get failed");
             break;
         }
-
         esp_err_t res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
         if (res != ESP_OK) {
             esp_camera_fb_return(fb);
@@ -69,8 +77,6 @@ static esp_err_t stream_get_handler(httpd_req_t *req) {
                 break;
             }
         } else {
-            // Convert on the fly and stream via callback to avoid big allocs
-            // Simpler: encode to full buffer to know length (small quality to keep CPU/memory low)
             uint8_t *jpg_buf = NULL; size_t jpg_len = 0;
             bool ok = frame2jpg(fb, 60, &jpg_buf, &jpg_len);
             if (!ok || !jpg_buf) {
@@ -113,7 +119,67 @@ httpd_handle_t start_webserver(void) {
     return server;
 }
 
+httpd_handle_t start_motion(void) {
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 8080;
+    config.ctrl_port = 32769;
+    config.lru_purge_enable = true;
+    httpd_handle_t server = NULL;
+    if (httpd_start(&server, &config) == ESP_OK) {
+        httpd_uri_t motion_uri = {.uri="/motion", .method=HTTP_GET, .handler=motion_get_handler, .user_ctx=NULL};
+        httpd_register_uri_handler(server, &motion_uri);
+    } else {
+        ESP_LOGE(TAG, "Failed starting HTTP server");
+    }
+    return server;
+}
+
 static esp_err_t index_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, INDEX_HTML, HTTPD_RESP_USE_STRLEN);
+}
+
+
+static esp_err_t motion_get_handler(httpd_req_t *req) {
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no frame available");
+        return ESP_FAIL;
+    }
+
+    if (fb->format != PIXFORMAT_RGB565) {
+        esp_camera_fb_return(fb);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "camera not in RGB565 mode");
+        return ESP_FAIL;
+    }
+
+    const size_t rgb565_len = (size_t)fb->width * fb->height * 2;
+    if (fb->len < rgb565_len) {
+        esp_camera_fb_return(fb);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "frame size mismatch");
+        return ESP_FAIL;
+    }
+
+    uint8_t *copy = (uint8_t *)heap_caps_malloc(rgb565_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!copy) {
+        copy = (uint8_t *)malloc(rgb565_len);
+    }
+    if (!copy) {
+        esp_camera_fb_return(fb);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "insufficient memory");
+        return ESP_FAIL;
+    }
+
+    memcpy(copy, fb->buf, rgb565_len);
+    esp_camera_fb_return(fb);
+
+    const char *caption = "Motion Detected";
+    if (!net_send_telegram_rgb565_take(copy, rgb565_len, fb->width, fb->height, 40, caption)) {
+        free(copy);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "enqueue failed");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
 }

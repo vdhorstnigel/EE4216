@@ -7,7 +7,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include "time_sync.h"
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "lwip/inet.h"
@@ -17,7 +16,6 @@ static const char *TAG = "telegram_sender";
 extern const char *Telegram_Bot_Token;
 extern const char *Telegram_Chat_ID;
 extern const char *telegram_cert;
-extern const char *Telegram_Relay_URL;
 
 
 // Common HTTP client setup for Telegram POST
@@ -90,15 +88,6 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
 
     esp_err_t err = ESP_FAIL;
     const int max_attempts = 3;
-
-    // Ensure time is synced (block up to 15s); if not, abort early instead of wasting TLS attempts
-    if (!time_is_synced()) {
-        app_sntp_init(); // safe multi-call
-        if (!time_sync_block_until_synced(15000)) {
-            ESP_LOGW(TAG, "Time not synced after wait; deferring Telegram send");
-            return false;
-        }
-    }
 
     // 1) Try pinned root first
     esp_http_client_config_t cfg_pinned = {

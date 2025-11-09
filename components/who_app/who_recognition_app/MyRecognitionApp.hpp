@@ -9,25 +9,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include "credentials.h"
 
-extern "C" bool http_streaming_active(void);
-
-extern "C" bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
-                                               uint16_t width,
-                                               uint16_t height,
-                                               uint8_t quality,
-                                               const char *caption);
-//extern "C" bool send_json_over_tcp(const char *ip, uint16_t port, const char *json, size_t len);
-extern "C" bool post_plain_to_server(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
+// Async network sender enqueue APIs
+extern "C" bool net_send_http_plain_async(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
 
 class MyRecognitionApp : public who::app::WhoRecognitionAppLCD {
 public:
     explicit MyRecognitionApp(who::frame_cap::WhoFrameCap *frame_cap)
-        : who::app::WhoRecognitionAppLCD(frame_cap),
-          m_recognition_pending(false),
-          m_detection_active(false),
-          m_detection_start_tick(0),
-          m_last_detection_tick(0)
+        : who::app::WhoRecognitionAppLCD(frame_cap)
 
     {
 
@@ -40,39 +30,26 @@ public:
 
 protected:
     void recognition_result_cb(const std::string &result) override {
-        // disable LCD if needed
-        if (lcd_enabled()) {
-            who::app::WhoRecognitionAppLCD::recognition_result_cb(result);
-        }
-        m_recognition_pending = false;
+        who::app::WhoRecognitionAppLCD::recognition_result_cb(result);
         ESP_LOGI("Recognition", "%s", result.c_str());
         const TickType_t one_sec = pdMS_TO_TICKS(1000);
         TickType_t now_tick = xTaskGetTickCount();
 
-        // Parse results for id and sim 
+        // Parse results for id and similarity
         bool cur_known = false;
         int cur_id = -1;
         float cur_sim = 0.0f;
+
         if (result.find("id: ") != std::string::npos) {
-            int id = -1; float sim = 0.0f;
-            if (std::sscanf(result.c_str(), "id: %d, sim: %f", &id, &sim) == 2) {
+            int id = -1; float parsed_sim = 0.0f;
+            if (std::sscanf(result.c_str(), "id: %d, sim: %f", &id, &parsed_sim) == 2) {
                 cur_known = true;
                 cur_id = id;
-                cur_sim = sim;
-            } else {
-                return; // ignore other messages
+                cur_sim = parsed_sim;
             }
         } else if (result.find("who?") != std::string::npos) {
             cur_known = false;
-            cur_id = -1;
-            cur_sim = 0.0f;
-        } else {
-            return; // ignore other messages
         }
-
-        // Reset detection 
-        m_detection_active = false;
-        m_detection_start_tick = 0;
 
         // Require same outcome for 1s before posting
         if (m_stable_first) {
@@ -98,25 +75,25 @@ protected:
         }
 
         // Same outcome: send post
-        m_stable_sim = cur_sim;
         if (now_tick - m_stable_start_tick >= one_sec) {
             bool should_send = false;
             if (!m_stable_sent) {
                 should_send = true; // first send after stable
-            } else if (now_tick - m_last_stable_post_tick >= pdMS_TO_TICKS(10000)) {
-                should_send = true; // periodic resend every 10s while stable
+            } else if (now_tick - m_last_stable_post_tick >= pdMS_TO_TICKS(5000)) {
+                should_send = true; // periodic resend every 5s while stable
             }
             if (should_send) {
+                ESP_LOGI("Recognition", "Sending Results now: %s", result.c_str());
                 if (m_stable_known) {
                     char body[64];
                     int n = std::snprintf(body, sizeof(body), "authorized,%.2f", m_stable_sim);
                     if (n > 0) {
                         if (n >= (int)sizeof(body)) n = (int)sizeof(body) - 1;
-                        (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);
+                        net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);
                     }
                 } else {
                     const char *body = "denied,0";
-                    (void)post_plain_to_server(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body));
+                    net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body));
                 }
                 m_stable_sent = true;
                 m_last_stable_post_tick = now_tick;
@@ -125,98 +102,15 @@ protected:
     }
 
     void detect_result_cb(const who::detect::WhoDetect::result_t &result) override {
-        if (lcd_enabled()) {
-            who::app::WhoRecognitionAppLCD::detect_result_cb(result);
-        }
-        const TickType_t one_sec = pdMS_TO_TICKS(1000);
-        const TickType_t min_send_interval = pdMS_TO_TICKS(30000); // cooldown between motion snapshots, put 30 seconds to prevent spams
-        TickType_t now = xTaskGetTickCount();
+        who::app::WhoRecognitionAppLCD::detect_result_cb(result);
         if (!result.det_res.empty()) {
-            if (!m_detection_active) {
-                m_detection_active = true;
-                m_detection_start_tick = now;
-            }
-            m_last_detection_tick = now;
-            // If detection sustained for >= 1s, trigger recognition first
-            if (!m_recognition_pending && (now - m_detection_start_tick >= one_sec)) {
-                auto *rec_task = m_recognition->get_recognition_task();
-                if (rec_task && rec_task->is_active()) {
-                    xEventGroupSetBits(rec_task->get_event_group(), who::recognition::WhoRecognitionCore::RECOGNIZE);
-                    m_recognition_pending = true;
-                }
-            }
-            // Block snapshots while recognition is pending OR while detection is sustained (>=1s)
-            const bool recognition_window = m_recognition_pending || ((now - m_detection_start_tick) >= one_sec);
-            // Only consider snapshot outside recognition window and when cooldown elapsed
-            if (!recognition_window && (now - m_last_send_tick >= min_send_interval)) {
-                auto last_node = m_frame_cap->get_last_node();
-                if (last_node) {
-                    who::cam::cam_fb_t *fb = last_node->cam_fb_peek(-1);
-                    if (fb && fb->buf && fb->width && fb->height) {
-                        ESP_LOGI("Detection", "Motion snapshot: queue send task");
-                        const size_t rgb_len = (size_t)fb->width * fb->height * 2;
-                        uint8_t *copy = (uint8_t *)heap_caps_malloc(rgb_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                        if (!copy) {
-                            copy = (uint8_t *)malloc(rgb_len);
-                        }
-                        if (copy) {
-                            memcpy(copy, fb->buf, rgb_len);
-                            // Prepare context
-                            auto *ctx = (MotionSendCtx *)malloc(sizeof(MotionSendCtx));
-                            if (ctx) {
-                                ctx->rgb565 = copy;
-                                ctx->len = rgb_len;
-                                ctx->width = fb->width;
-                                ctx->height = fb->height;
-                                ctx->quality = 40;
-                                strncpy(ctx->caption, "Motion Detected", sizeof(ctx->caption) - 1);
-                                ctx->caption[sizeof(ctx->caption) - 1] = '\0';
-                                // TLS handshake (mbedTLS) can use a deep call stack; keep reasonably large but not excessive
-                                // to avoid internal RAM exhaustion on task creation. 6144 words ~= 24 KB stack.
-                                const uint32_t stack_words = 6144; // words (x4 bytes) => ~24KB
-                                BaseType_t ok = xTaskCreatePinnedToCore(&MyRecognitionApp::MotionSendTask,
-                                                                        "MotionSend",
-                                                                        stack_words,
-                                                                        (void *)ctx,
-                                                                        tskIDLE_PRIORITY, // keep lowest priority so detection/recognition win
-                                                                        nullptr,
-                                                                        0);
-                                if (ok != pdPASS) {
-                                    size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-                                    size_t largest_int = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-                                    size_t free_all = xPortGetFreeHeapSize();
-                                    ESP_LOGE("Detection", "Failed to create MotionSend task (req stack %u bytes). Free int=%u, largest int=%u, free total=%u",
-                                             (unsigned)(stack_words * sizeof(StackType_t)),
-                                             (unsigned)free_int, (unsigned)largest_int, (unsigned)free_all);
-                                    free(copy);
-                                    free(ctx);
-                                } else {
-                                    m_last_send_tick = now;
-                                }
-                            } else {
-                                ESP_LOGE("Detection", "Failed to alloc MotionSendCtx");
-                                free(copy);
-                            }
-                        } else {
-                            ESP_LOGE("Detection", "Failed to alloc RGB565 copy (%ux%u)", fb->width, fb->height);
-                        }
-                    }
-                }
-            }
-            // (recognition gating handled above)
-        } else {
-            // No detections in this frame; if it stays quiet for a short while, reset state
-            const TickType_t quiet_ms = pdMS_TO_TICKS(300);
-            if (m_detection_active && (now - m_last_detection_tick > quiet_ms)) {
-                m_detection_active = false;
-                m_detection_start_tick = 0;
-            }
+            auto *rec_task = m_recognition->get_recognition_task();
+            xEventGroupSetBits(rec_task->get_event_group(), who::recognition::WhoRecognitionCore::RECOGNIZE);
         }
     }
 
     void recognition_cleanup() override {
         who::app::WhoRecognitionAppLCD::recognition_cleanup();
-        m_recognition_pending = false;
     }
 
     void detect_cleanup() override {
@@ -224,47 +118,6 @@ protected:
     }
 
 private:
-    // LCD enabled
-    static inline bool lcd_enabled() {
-        return true;
-        //return !http_streaming_active() && !s_sending_snapshot;
-    }
-
-    struct MotionSendCtx {
-        uint8_t *rgb565;
-        size_t len;
-        uint16_t width;
-        uint16_t height;
-        uint8_t quality;
-        char caption[64];
-    };
-
-    // send snapshot over tcp when motion detected
-    static void MotionSendTask(void *arg) {
-        MotionSendCtx *ctx = (MotionSendCtx *)arg;
-        if (ctx) {
-            vTaskDelay(100);
-            s_sending_snapshot = true;
-            UBaseType_t hw_before = uxTaskGetStackHighWaterMark(nullptr);
-            ESP_LOGI("MotionSend", "Sending snapshot to Telegram (%ux%u)", ctx->width, ctx->height);
-            (void)send_rgb565_image_to_telegram(ctx->rgb565, ctx->width, ctx->height, ctx->quality, ctx->caption);
-            UBaseType_t hw_after = uxTaskGetStackHighWaterMark(nullptr);
-            ESP_LOGI("MotionSend", "Stack watermark (words) before/after: %u/%u", (unsigned)hw_before, (unsigned)hw_after);
-            s_sending_snapshot = false;
-            free(ctx->rgb565);
-            free(ctx);
-        }
-        vTaskDelete(nullptr);
-    }
-
-    // LCD drawing is dynamically gated via lcd_enabled()
-    bool m_recognition_pending;
-    bool m_detection_active;
-    TickType_t m_detection_start_tick;
-    TickType_t m_last_detection_tick;
-    TickType_t m_motion_detected_tick;
-    TickType_t m_last_send_tick {0};
-    static inline volatile bool s_sending_snapshot = false;
     // Recognition stability gating
     bool m_stable_first {true};
     bool m_stable_known {false};

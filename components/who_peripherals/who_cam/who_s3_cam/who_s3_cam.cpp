@@ -36,6 +36,10 @@ WhoS3Cam::~WhoS3Cam()
 cam_fb_t *WhoS3Cam::cam_fb_get()
 {
     camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        ESP_LOGW(TAG, "Failed to get frame buffer (timeout/null)");
+        return nullptr;
+    }
     int i = get_cam_fb_index();
     m_cam_fbs[i] = cam_fb_t(*fb);
     return &m_cam_fbs[i];
@@ -43,12 +47,15 @@ cam_fb_t *WhoS3Cam::cam_fb_get()
 
 void WhoS3Cam::cam_fb_return(cam_fb_t *fb)
 {
+    if (!fb || !fb->ret) {
+        return;
+    }
     esp_camera_fb_return((camera_fb_t *)fb->ret);
 }
 
 esp_err_t WhoS3Cam::set_flip(bool vertical_flip, bool horizontal_flip)
 {
-    if (!vertical_flip & !horizontal_flip) {
+    if (!vertical_flip && !horizontal_flip) {
         return ESP_OK;
     }
     sensor_t *s = esp_camera_sensor_get();

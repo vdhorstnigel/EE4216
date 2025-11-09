@@ -6,9 +6,7 @@ extern "C" {
 #endif
 
 httpd_handle_t start_webserver(void);
-
-// Returns true while a /stream client is actively connected and being served
-bool http_streaming_active(void);
+httpd_handle_t start_motion(void);
 
 #ifdef __cplusplus
 }
