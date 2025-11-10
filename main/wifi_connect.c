@@ -16,6 +16,7 @@
 #include "credentials.h"
 #include "wifi_connect.h"
 
+// basic event handlers to print out logs
 static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id,void *event_data){
 const char *TAG = "wifi_init";
 if(event_id == WIFI_EVENT_STA_START)
@@ -38,7 +39,7 @@ else if (event_id == IP_EVENT_STA_GOT_IP)
 }
 }
 
-
+// wifi for static ip using hotspot for peer to peer connection
 void static_wifi_init()
 {
   esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();  
@@ -82,6 +83,7 @@ void static_wifi_init()
     printf( "wifi_init_sta finished. SSID:%s\n",ssid);
 }
 
+// basic wifi with dhcp
 void wifi_init()
 {
   // Create default STA interface (must be done after esp_netif_init())
@@ -116,6 +118,7 @@ void wifi_init()
   printf("wifi_init_sta finished. SSID:%s\n", ssid);
 }
 
+// using NUS wifi with PEAP but nus wifi block http server
 void nus_wifi_init()
 {
   esp_netif_create_default_wifi_sta();  
@@ -124,21 +127,19 @@ void nus_wifi_init()
   ESP_ERROR_CHECK(esp_wifi_init(&wifi_initiation)); //     
   ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
   ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
-  // Zero-initialize to avoid missing-field warnings
   wifi_config_t wifi_configuration; 
   memset(&wifi_configuration, 0, sizeof(wifi_configuration));
   wifi_configuration.sta.pmf_cfg.capable = true;
   wifi_configuration.sta.pmf_cfg.required = false;
   strncpy((char*)wifi_configuration.sta.ssid, NUS_ssid, sizeof(wifi_configuration.sta.ssid)-1);
-
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_configuration));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_eap_client_set_identity((uint8_t *)NUS_identity, strlen(NUS_identity)));
-    ESP_ERROR_CHECK(esp_eap_client_set_username((uint8_t *)NUS_username, strlen(NUS_username)));
-    ESP_ERROR_CHECK(esp_eap_client_set_password((uint8_t *)NUS_password, strlen(NUS_password)));
-    ESP_ERROR_CHECK(esp_wifi_sta_enterprise_enable());
-    ESP_ERROR_CHECK(esp_wifi_connect());
-    printf( "wifi_init_sta finished. WPA2 PEAP SSID:%s \n",NUS_ssid);
+  ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_configuration));
+  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+  ESP_ERROR_CHECK(esp_wifi_start());
+  ESP_ERROR_CHECK(esp_eap_client_set_identity((uint8_t *)NUS_identity, strlen(NUS_identity)));
+  ESP_ERROR_CHECK(esp_eap_client_set_username((uint8_t *)NUS_username, strlen(NUS_username)));
+  ESP_ERROR_CHECK(esp_eap_client_set_password((uint8_t *)NUS_password, strlen(NUS_password)));
+  ESP_ERROR_CHECK(esp_wifi_sta_enterprise_enable());
+  ESP_ERROR_CHECK(esp_wifi_connect());
+  printf( "wifi_init_sta finished. WPA2 PEAP SSID:%s \n",NUS_ssid);
 }
 

@@ -140,7 +140,6 @@ static char *strdup_n(const char *s)
     return p;
 }
 // For all data send, we create a copy of the data to send, so that we can release the frame faster. Uses more memory but better responsiveness.
-
 bool net_send_http_plain_async(const char *ip,
                                uint16_t port,
                                const char *path,
