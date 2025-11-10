@@ -14,6 +14,11 @@
 // Async network sender enqueue APIs
 extern "C" bool net_send_http_plain_async(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
 
+
+// C++ isnt really what was taught and I am not really sure how to do OOP
+// The app class extends the LCD recognition app and we hijack the callback function to add our own functionality
+// This library was used as it is able to display on LCD as well as do recognition, we an then add logging to the callback and get the results
+
 class MyRecognitionApp : public who::app::WhoRecognitionAppLCD {
 public:
     explicit MyRecognitionApp(who::frame_cap::WhoFrameCap *frame_cap)
@@ -29,8 +34,11 @@ public:
     }
 
 protected:
+    // Callback hijack to add logging and network sending
     void recognition_result_cb(const std::string &result) override {
+        //display LCD for recognition result 
         who::app::WhoRecognitionAppLCD::recognition_result_cb(result);
+        // Informational log to see recognition results and time stamps
         ESP_LOGI("Recognition", "%s", result.c_str());
         const TickType_t one_sec = pdMS_TO_TICKS(1000);
         TickType_t now_tick = xTaskGetTickCount();
@@ -40,6 +48,7 @@ protected:
         int cur_id = -1;
         float cur_sim = 0.0f;
 
+        // Checks for known or unknown 
         if (result.find("id: ") != std::string::npos) {
             int id = -1; float parsed_sim = 0.0f;
             if (std::sscanf(result.c_str(), "id: %d, sim: %f", &id, &parsed_sim) == 2) {
@@ -83,15 +92,18 @@ protected:
                 should_send = true; // periodic resend every 5s while stable
             }
             if (should_send) {
+                // By information logging here, we can check timestamps to ensure the logic is correct
                 ESP_LOGI("Recognition", "Sending Results now: %s", result.c_str());
                 if (m_stable_known) {
                     char body[64];
+                    // snprintf for the authorized to add similarity score
                     int n = std::snprintf(body, sizeof(body), "authorized,%.2f", m_stable_sim);
                     if (n > 0) {
                         if (n >= (int)sizeof(body)) n = (int)sizeof(body) - 1;
                         net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, (size_t)n);
                     }
                 } else {
+                    // similarity score will be 0 for unknowns 
                     const char *body = "denied,0";
                     net_send_http_plain_async(ESP32_Receiver_IP, ESP32_Receiver_Port, ESP32_Receiver_Path, body, strlen(body));
                 }
@@ -101,14 +113,18 @@ protected:
         }
     }
 
+    // Callback hijack to add logging and trigger recognition after detection
     void detect_result_cb(const who::detect::WhoDetect::result_t &result) override {
+        // display LCD but for detection bounding boxes
         who::app::WhoRecognitionAppLCD::detect_result_cb(result);
+        // If detected: auto trigger recognition as the app doesnt do this by default
         if (!result.det_res.empty()) {
             auto *rec_task = m_recognition->get_recognition_task();
             xEventGroupSetBits(rec_task->get_event_group(), who::recognition::WhoRecognitionCore::RECOGNIZE);
         }
     }
 
+    // Add clean ups but not really used 
     void recognition_cleanup() override {
         who::app::WhoRecognitionAppLCD::recognition_cleanup();
     }
@@ -118,7 +134,7 @@ protected:
     }
 
 private:
-    // Recognition stability gating
+    // Recognition stability parameters 
     bool m_stable_first {true};
     bool m_stable_known {false};
     int m_stable_id {-1};

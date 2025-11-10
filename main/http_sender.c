@@ -6,6 +6,7 @@
 
 static const char *TAG_HTTP = "http_sender";
 
+// Simple synchronous HTTP POST sending to send the authorization result
 bool post_plain_to_server(const char *ip,
                           uint16_t port,
                           const char *path,
@@ -16,7 +17,6 @@ bool post_plain_to_server(const char *ip,
 
     char url[192];
     const char *p = path;
-    char path_buf[96];
     snprintf(url, sizeof(url), "http://%s:%u%s", ip, (unsigned)port, p);
 
     esp_http_client_config_t cfg = {
@@ -34,7 +34,7 @@ bool post_plain_to_server(const char *ip,
     esp_http_client_set_header(client, "Content-Type", "text/plain; charset=utf-8");
     esp_http_client_set_post_field(client, body, (int)len);
 
-    // Perform with a small retry on transient EAGAIN/timeout
+    // Perform with a small retry on transient EAGAIN/timeout, ensuring client server reliability.
     esp_err_t err = ESP_FAIL;
     for (int attempt = 1; attempt <= 2; ++attempt) {
         err = esp_http_client_perform(client);

@@ -1,3 +1,5 @@
+# Add esp32_s3_eye as a dependency for Board Support Package, required by ESP-WHO
+
 dependencies:
   esp32_s3_eye:
     version: '*'

@@ -25,6 +25,7 @@ extern "C" void ntp_sync() {
     time_t now = 0;
     struct tm timeinfo = { 0 };
 
+    //set NTP server and sync interval
     sntp_set_sync_interval(1 * 60 * 60 * 1000UL);  // 1 hour
     esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "0.sg.pool.ntp.org");
@@ -32,9 +33,11 @@ extern "C" void ntp_sync() {
     esp_sntp_setservername(2, "2.sg.pool.ntp.org");
     esp_sntp_init();
 
+    // Set SG timezone
     setenv("TZ", "CST-8", 1);
     tzset();
 
+    // try to sync for at least 20 times 
     for (int retry = 1; retry <= 20; retry++) {
         time(&now);
         localtime_r(&now, &timeinfo);
@@ -60,13 +63,16 @@ extern "C" void init(void *pvParameter) {
     // Start asynchronous network sender (pinned to core 1)
     (void)net_sender_start(1);
 
+    // Start async servers
     start_webserver();
     start_motion();
 
+    //Give back semaphore so that main task can continue 
     xSemaphoreGive(task_semaphore);
     vTaskDelete(NULL);
 }
 
+// C linker needed for recognition app
 extern "C" void app_main(void)
 {
     task_semaphore = xSemaphoreCreateBinary();
@@ -91,6 +97,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
     
+    // Initialize nvs, netif, event loop for wifi 
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -99,6 +106,7 @@ extern "C" void app_main(void)
 
     xSemaphoreTake(task_semaphore, portMAX_DELAY);
 
+    // Frame capture pipeline and recognition app from examples
     auto frame_cap = get_dvp_frame_cap_pipeline();
 
     auto recognition_app = new MyRecognitionApp(frame_cap);

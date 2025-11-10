@@ -30,6 +30,11 @@ bool net_send_telegram_rgb565_take(uint8_t *rgb565,
                                    uint8_t quality,
                                    const char *caption);
 
+typedef struct {
+    bool telegram_ok;
+    bool supabase_ok;
+} http_success_t;
+
 #ifdef __cplusplus
 }
 #endif

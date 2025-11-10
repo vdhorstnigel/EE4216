@@ -13,13 +13,13 @@
 static esp_err_t index_get_handler(httpd_req_t *req);
 static esp_err_t motion_get_handler(httpd_req_t *req);
 
+// HTTP stream server implementation, required headers and boundaries
 static const char *TAG = "http_stream";
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=frame";
 static const char *_STREAM_BOUNDARY = "\r\n--frame\r\n";
 static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 
-static volatile bool s_streaming_active = false;
-
+// Context for motion detection frames
 struct MotionCtx {
     uint8_t *rgb565;
     size_t len;
@@ -29,6 +29,7 @@ struct MotionCtx {
     char caption[64];
 };
 
+// HTML page for index
 static const char *INDEX_HTML =
     "<!doctype html><html><head><meta name=viewport content='width=device-width, initial-scale=1'/>"
     "<title>ESP Stream</title>"
@@ -56,19 +57,25 @@ static esp_err_t stream_get_handler(httpd_req_t *req) {
     char part_buf[64];
     httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
     ESP_LOGI(TAG, "stream: client connected");
-    s_streaming_active = true;
     while (true) {
+        // Get the latest camera frame
         camera_fb_t *fb = esp_camera_fb_get();
         if (!fb) {
             ESP_LOGW(TAG, "stream: fb_get failed");
             break;
         }
+        // Send the frame as a multipart HTTP response
         esp_err_t res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
         if (res != ESP_OK) {
+            // Must release frame buffer if not sent, else core will panic due to buffer overflow
             esp_camera_fb_return(fb);
             break;
         }
-
+        // Check if the frame is already in JPEG format, else convert it
+        // Most likely the frame is in RGB565 format so will need to convert it to JPEG for streaming
+        // Send the data is chunks fo 64 bytes so that sending is fast
+        // Must avoid large blocking send that will cause frame buffer overflow
+        // Frame buffer needs to be released back to camera driver after use 
         if (fb->format == PIXFORMAT_JPEG) {
             int hlen = snprintf(part_buf, sizeof(part_buf), _STREAM_PART, fb->len);
             if (httpd_resp_send_chunk(req, part_buf, hlen) != ESP_OK ||
@@ -97,13 +104,13 @@ static esp_err_t stream_get_handler(httpd_req_t *req) {
         esp_camera_fb_return(fb);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
-    // Terminate the response
+    // Terminate the response if no client is connected / client disconnected
     httpd_resp_send_chunk(req, NULL, 0);
     ESP_LOGI(TAG, "stream: client disconnected");
-    s_streaming_active = false;
     return ESP_OK;
 }
 
+// simple web server start function
 httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
@@ -119,6 +126,8 @@ httpd_handle_t start_webserver(void) {
     return server;
 }
 
+// Motion detection server has to start on a different port and ctrl_port
+// When testing, if using the same port as webserver, the stream will continously block and motion detection API request
 httpd_handle_t start_motion(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 8080;
@@ -141,7 +150,9 @@ static esp_err_t index_get_handler(httpd_req_t *req) {
 
 
 static esp_err_t motion_get_handler(httpd_req_t *req) {
+    // Get latest frame from camera
     camera_fb_t *fb = esp_camera_fb_get();
+    // validation checks 
     if (!fb) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no frame available");
         return ESP_FAIL;
@@ -170,9 +181,11 @@ static esp_err_t motion_get_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
+    // Copy the frame data and return the frame buffer to camera driver so that the camera can continue capturing new frames
     memcpy(copy, fb->buf, rgb565_len);
     esp_camera_fb_return(fb);
 
+    // send to telegram async sender task so that camera will not be blocked when sending http
     const char *caption = "Motion Detected";
     if (!net_send_telegram_rgb565_take(copy, rgb565_len, fb->width, fb->height, 40, caption)) {
         free(copy);

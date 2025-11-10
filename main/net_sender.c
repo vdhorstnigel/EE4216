@@ -8,8 +8,8 @@
 
 // Existing sync senders we will call from the background task
 bool post_plain_to_server(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
-bool send_rgb565_image_to_telegram(const uint8_t *rgb565, uint16_t width, uint16_t height, uint8_t quality, const char *caption);
-bool send_rgb565_image_to_supabase(const uint8_t *rgb565, uint16_t width, uint16_t height, uint8_t quality, const char *caption);
+// Combined JPEG send: converts once and sends to both Telegram and Supabase
+http_success_t send_rgb565_image(const uint8_t *rgb565, uint16_t width, uint16_t height, uint8_t quality, const char *caption);
 
 static const char *TAG = "net_sender";
 
@@ -46,6 +46,7 @@ typedef struct {
 static QueueHandle_t s_queue = NULL;
 static TaskHandle_t s_task = NULL;
 
+// Need to free buffers or memory will leak
 static void net_item_free(net_item_t *it)
 {
     if (!it) return;
@@ -65,9 +66,11 @@ static void net_sender_task(void *arg)
     ESP_LOGI(TAG, "network sender task started on core %d", xPortGetCoreID());
     net_item_t item;
     while (1) {
+        // Create a queue for the sending items
         if (xQueueReceive(s_queue, &item, portMAX_DELAY) != pdTRUE) {
             continue;
         }
+        // Process the item based on its type
         switch (item.type) {
             case NET_ITEM_HTTP_PLAIN: {
                 bool ok = post_plain_to_server(item.u.http.ip,
@@ -80,20 +83,15 @@ static void net_sender_task(void *arg)
                 break;
             }
             case NET_ITEM_TG_RGB565: {
-                // send_rgb565_image_to_telegram handles conversion and TLS send
-                bool ok = send_rgb565_image_to_telegram(item.u.tg.rgb565,
-                                                        item.u.tg.width,
-                                                        item.u.tg.height,
-                                                        item.u.tg.quality,
-                                                        item.u.tg.caption ? item.u.tg.caption : "");
-                ESP_LOGI(TAG, "Telegram photo sent: %s", ok ? "OK" : "FAIL");
-                bool sb_ok = send_rgb565_image_to_supabase(item.u.tg.rgb565,
-                                                        item.u.tg.width,
-                                                        item.u.tg.height,
-                                                        item.u.tg.quality,
-                                                        item.u.tg.caption ? item.u.tg.caption : "");
-                ESP_LOGI(TAG, "Supabase photo sent: %s", sb_ok ? "OK" : "FAIL");
-                // We must free buffers we own
+                // send rgb565 image to telegram and supabase with single conversion
+                http_success_t ok = send_rgb565_image(item.u.tg.rgb565,
+                                                      item.u.tg.width,
+                                                      item.u.tg.height,
+                                                      item.u.tg.quality,
+                                                      item.u.tg.caption ? item.u.tg.caption : "");
+                ESP_LOGI(TAG, "Telegram photo sent: %s", ok.telegram_ok ? "OK" : "FAIL");
+                ESP_LOGI(TAG, "Supabase photo sent: %s", ok.supabase_ok ? "OK" : "FAIL");
+                // We must free buffers
                 net_item_free(&item);
                 break;
             }
@@ -102,13 +100,14 @@ static void net_sender_task(void *arg)
                 net_item_free(&item);
                 break;
         }
-        // Yield briefly to avoid monopolizing a core if queue is busy
+        // Yield briefly to avoid monopolizing a core if queue is busy but normally its okay as only sending is on Core 1
         vTaskDelay(1);
     }
 }
 
 bool net_sender_start(int core_id)
 {
+    // simple validation checks 
     if (s_task) return true;
     if (core_id != 0 && core_id != 1) core_id = 1;
     if (!s_queue) {
@@ -119,6 +118,7 @@ bool net_sender_start(int core_id)
             return false;
         }
     }
+    // create stack for TLS. During testing, if the stack is too small, mbedTLS will fail to allocate memory and unable to send data
     const uint32_t stack_words = 6144; // ~24 KB stack for TLS
     UBaseType_t prio = tskIDLE_PRIORITY + 2; // moderate priority
     BaseType_t rc = xTaskCreatePinnedToCore(net_sender_task, "net_sender", stack_words, NULL, prio, &s_task, core_id);
@@ -130,6 +130,7 @@ bool net_sender_start(int core_id)
     return true;
 }
 
+// Duplicate a string with malloc
 static char *strdup_n(const char *s)
 {
     if (!s) return NULL;
@@ -138,6 +139,7 @@ static char *strdup_n(const char *s)
     if (p) memcpy(p, s, n);
     return p;
 }
+// For all data send, we create a copy of the data to send, so that we can release the frame faster. Uses more memory but better responsiveness.
 
 bool net_send_http_plain_async(const char *ip,
                                uint16_t port,

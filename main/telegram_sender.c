@@ -11,6 +11,7 @@
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "lwip/inet.h"
+#include "net_sender.h"
 
 static const char *TAG = "telegram_sender";
 
@@ -23,6 +24,7 @@ extern const char *SUPABASE_SERVICE_KEY;
 extern const char *BUCKET;
 
 
+
 // Common HTTP client setup for Telegram POST
 static inline void setup_http_client(esp_http_client_handle_t h, const char *ctype)
 {
@@ -31,7 +33,7 @@ static inline void setup_http_client(esp_http_client_handle_t h, const char *cty
     esp_http_client_set_header(h, "User-Agent", "esp-idf-telegram/1.0");
 }
 
-
+// Function to write all data to HTTP client
 static bool http_write_all(esp_http_client_handle_t client, const void *buf, int len) {
     const uint8_t *p = (const uint8_t *)buf;
     int total = 0;
@@ -91,7 +93,7 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
     esp_err_t err = ESP_FAIL;
     const int max_attempts = 3;
 
-    // 1) Try pinned root first
+    // Used telegram cert for SSL verification
     esp_http_client_config_t cfg_pinned = {
         .url = url,
         .cert_pem = telegram_cert,
@@ -117,12 +119,13 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
         }
     }
 
-
+    // If no client connection available, abort sending
     if (client == NULL) {
         ESP_LOGE(TAG, "No HTTP client connection available, aborting send");
         return false;
     }
 
+    // send data in parts to prevent large blocking write and buffer issues
     bool ok = http_write_all(client, part1, part1_len)
            && http_write_all(client, part2_hdr, part2_hdr_len)
            && http_write_all(client, jpg, (int)jpg_len);
@@ -154,6 +157,7 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
     return success;
 }
 
+// pretty much the same as send_jpeg_to_telegram but for Supabase storage upload, using different HTTP method and headers
 static bool send_jpeg_to_supabase(const uint8_t *jpg, size_t jpg_len, const char *caption)
 {
     if (!jpg || jpg_len == 0 || !SUPABASE_URL || !SUPABASE_SERVICE_KEY || !BUCKET) {
@@ -242,42 +246,31 @@ static bool send_jpeg_to_supabase(const uint8_t *jpg, size_t jpg_len, const char
     return true;
 }
 
-bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
-                                   uint16_t width,
-                                   uint16_t height,
-                                   uint8_t quality,
-                                   const char *caption)
+http_success_t send_rgb565_image(const uint8_t *rgb565,
+                                             uint16_t width,
+                                             uint16_t height,
+                                             uint8_t quality,
+                                             const char *caption)
 {
-    if (!rgb565 || width == 0 || height == 0) return false;
+    http_success_t result = { .telegram_ok = false, .supabase_ok = false };
+    if (!rgb565 || width == 0 || height == 0) {
+        return result;
+    }
+    // create buffer for JPEG conversion
     uint8_t *jpg_buf = NULL;
     size_t jpg_len = 0;
     size_t src_len = (size_t)width * height * 2;
+    // convert to JPEG
     bool conv = fmt2jpg((uint8_t *)rgb565, src_len, width, height, PIXFORMAT_RGB565, quality, &jpg_buf, &jpg_len);
     if (!conv || !jpg_buf) {
         ESP_LOGE(TAG, "fmt2jpg failed");
-        return false;
+        return result;
     }
-    bool ok = send_jpeg_to_telegram(jpg_buf, jpg_len, caption);
+    // send the JPEG buffer to Telegram
+    result.telegram_ok = send_jpeg_to_telegram(jpg_buf, jpg_len, caption);
+    // send the JPEG buffer to Supabase
+    result.supabase_ok = send_jpeg_to_supabase(jpg_buf, jpg_len, caption);
+    // Free the JPEG buffer
     free(jpg_buf);
-    return ok;
-}
-
-bool send_rgb565_image_to_supabase(const uint8_t *rgb565,
-                                   uint16_t width,
-                                   uint16_t height,
-                                   uint8_t quality,
-                                   const char *caption)
-{
-    if (!rgb565 || width == 0 || height == 0) return false;
-    uint8_t *jpg_buf = NULL;
-    size_t jpg_len = 0;
-    size_t src_len = (size_t)width * height * 2;
-    bool conv = fmt2jpg((uint8_t *)rgb565, src_len, width, height, PIXFORMAT_RGB565, quality, &jpg_buf, &jpg_len);
-    if (!conv || !jpg_buf) {
-        ESP_LOGE(TAG, "fmt2jpg failed");
-        return false;
-    }
-    bool ok = send_jpeg_to_supabase(jpg_buf, jpg_len, caption);
-    free(jpg_buf);
-    return ok;
+    return result;
 }
