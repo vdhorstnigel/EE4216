@@ -151,6 +151,7 @@ static esp_err_t index_get_handler(httpd_req_t *req) {
 
 static esp_err_t motion_get_handler(httpd_req_t *req) {
     // Get latest frame from camera
+    ESP_LOGI(TAG, "Motion detected, getting frame");
     camera_fb_t *fb = esp_camera_fb_get();
     // validation checks 
     if (!fb) {

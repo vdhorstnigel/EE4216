@@ -23,7 +23,8 @@ extern const char *SUPABASE_URL;
 extern const char *SUPABASE_SERVICE_KEY;
 extern const char *BUCKET;
 
-
+static time_t now = 0;
+static struct tm timeinfo = { 0 };
 
 // Common HTTP client setup for Telegram POST
 static inline void setup_http_client(esp_http_client_handle_t h, const char *ctype)
@@ -164,12 +165,10 @@ static bool send_jpeg_to_supabase(const uint8_t *jpg, size_t jpg_len, const char
         ESP_LOGE(TAG, "bad args or missing Supabase credentials");
         return false;
     }
-
-    int64_t us = esp_timer_get_time();
-    long long ms = us / 1000LL;
+    time(&now);
+    localtime_r(&now, &timeinfo);
     char filename[48];
-    snprintf(filename, sizeof(filename), "%lld.jpg", ms);
-
+    snprintf(filename, sizeof(filename), "%lld.jpg", now);
 
     char url[256];
     int n = snprintf(url, sizeof(url), "%s/storage/v1/object/%s/%s", SUPABASE_URL, BUCKET, filename);
@@ -231,7 +230,7 @@ static bool send_jpeg_to_supabase(const uint8_t *jpg, size_t jpg_len, const char
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
 
-    if (status < 200 || status >= 300) {
+    if (status != 200) {
         ESP_LOGE(TAG, "Supabase upload failed, HTTP %d", status);
         return false;
     }
