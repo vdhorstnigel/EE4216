@@ -35,7 +35,7 @@ extern "C" void ntp_sync() {
     setenv("TZ", "CST-8", 1);
     tzset();
 
-    for (int retry = 0; retry < 20; retry++) {
+    for (int retry = 1; retry <= 20; retry++) {
         time(&now);
         localtime_r(&now, &timeinfo);
 
@@ -44,7 +44,7 @@ extern "C" void ntp_sync() {
             return;
         }
 
-        ESP_LOGI("SNTP", "Waiting for time to be synchronized... (%d/10)", retry + 1);
+        ESP_LOGI("SNTP", "Waiting for time to be synchronized... (%d/20)", retry);
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 
