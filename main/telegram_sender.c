@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include "esp_timer.h"
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "lwip/inet.h"
@@ -16,6 +17,10 @@ static const char *TAG = "telegram_sender";
 extern const char *Telegram_Bot_Token;
 extern const char *Telegram_Chat_ID;
 extern const char *telegram_cert;
+
+extern const char *SUPABASE_URL;
+extern const char *SUPABASE_SERVICE_KEY;
+extern const char *BUCKET;
 
 
 // Common HTTP client setup for Telegram POST
@@ -50,7 +55,6 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
 
     const char *boundary = "------------------------7e13971310874b5f"; // static boundary
 
-    // Build multipart parts (excluding the binary which we stream separately)
     char part1[256];
     int part1_len = snprintf(part1, sizeof(part1),
         "--%s\r\n"
@@ -80,8 +84,6 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
 
     size_t content_length = (size_t)part1_len + (size_t)part2_hdr_len + jpg_len + (size_t)part3_cap_len + (size_t)closing_len;
 
-    // Prefer pinned certificate first; if that fails (e.g., different CDN/CA on some networks),
-    // fallback to ESP-IDF certificate bundle for broader trust coverage.
     esp_http_client_handle_t client = NULL;
     char ctype[96];
     snprintf(ctype, sizeof(ctype), "multipart/form-data; boundary=%s", boundary);
@@ -152,7 +154,94 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
     return success;
 }
 
-// Public API: Convert RGB565 to JPEG and send to Telegram
+static bool send_jpeg_to_supabase(const uint8_t *jpg, size_t jpg_len, const char *caption)
+{
+    if (!jpg || jpg_len == 0 || !SUPABASE_URL || !SUPABASE_SERVICE_KEY || !BUCKET) {
+        ESP_LOGE(TAG, "bad args or missing Supabase credentials");
+        return false;
+    }
+
+    int64_t us = esp_timer_get_time();
+    long long ms = us / 1000LL;
+    char filename[48];
+    snprintf(filename, sizeof(filename), "%lld.jpg", ms);
+
+
+    char url[256];
+    int n = snprintf(url, sizeof(url), "%s/storage/v1/object/%s/%s", SUPABASE_URL, BUCKET, filename);
+    if (n <= 0 || n >= (int)sizeof(url)) {
+        ESP_LOGE(TAG, "URL too long");
+        return false;
+    }
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .timeout_ms = 30000,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
+        .keep_alive_enable = false,
+        .buffer_size = 1024,
+        .buffer_size_tx = 1024,
+        .crt_bundle_attach = esp_crt_bundle_attach, // rely on IDF certificate bundle
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        ESP_LOGE(TAG, "http client init failed");
+        return false;
+    }
+
+    esp_http_client_set_method(client, HTTP_METHOD_PUT);
+    esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+    esp_http_client_set_header(client, "apikey", SUPABASE_SERVICE_KEY);
+
+    char auth[192];
+    snprintf(auth, sizeof(auth), "Bearer %s", SUPABASE_SERVICE_KEY);
+    esp_http_client_set_header(client, "Authorization", auth);
+
+    esp_http_client_set_header(client, "x-upsert", "true");
+
+    esp_err_t err = esp_http_client_open(client, (int)jpg_len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "http open failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    int written = esp_http_client_write(client, (const char *)jpg, (int)jpg_len);
+    if (written != (int)jpg_len) {
+        ESP_LOGE(TAG, "http write failed %d/%d", written, (int)jpg_len);
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+
+    (void)esp_http_client_fetch_headers(client);
+    int status = esp_http_client_get_status_code(client);
+
+    // Read response body (often contains helpful JSON error message)
+    char resp[256];
+    int rlen = esp_http_client_read(client, resp, sizeof(resp) - 1);
+    if (rlen > 0) {
+        resp[rlen] = '\0';
+        ESP_LOGI(TAG, "Supabase response: %s", resp);
+    }
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    if (status < 200 || status >= 300) {
+        ESP_LOGE(TAG, "Supabase upload failed, HTTP %d", status);
+        return false;
+    }
+
+    char pub[256];
+    int m = snprintf(pub, sizeof(pub), "%s/storage/v1/object/public/%s/%s", SUPABASE_URL, BUCKET, filename);
+    if (m > 0 && m < (int)sizeof(pub)) {
+        ESP_LOGI(TAG, "Supabase image uploaded: %s", pub);
+    } else {
+        ESP_LOGI(TAG, "Supabase image uploaded: %s/...", filename);
+    }
+    return true;
+}
+
 bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
                                    uint16_t width,
                                    uint16_t height,
@@ -169,6 +258,26 @@ bool send_rgb565_image_to_telegram(const uint8_t *rgb565,
         return false;
     }
     bool ok = send_jpeg_to_telegram(jpg_buf, jpg_len, caption);
+    free(jpg_buf);
+    return ok;
+}
+
+bool send_rgb565_image_to_supabase(const uint8_t *rgb565,
+                                   uint16_t width,
+                                   uint16_t height,
+                                   uint8_t quality,
+                                   const char *caption)
+{
+    if (!rgb565 || width == 0 || height == 0) return false;
+    uint8_t *jpg_buf = NULL;
+    size_t jpg_len = 0;
+    size_t src_len = (size_t)width * height * 2;
+    bool conv = fmt2jpg((uint8_t *)rgb565, src_len, width, height, PIXFORMAT_RGB565, quality, &jpg_buf, &jpg_len);
+    if (!conv || !jpg_buf) {
+        ESP_LOGE(TAG, "fmt2jpg failed");
+        return false;
+    }
+    bool ok = send_jpeg_to_supabase(jpg_buf, jpg_len, caption);
     free(jpg_buf);
     return ok;
 }

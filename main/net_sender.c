@@ -9,6 +9,7 @@
 // Existing sync senders we will call from the background task
 bool post_plain_to_server(const char *ip, uint16_t port, const char *path, const char *body, size_t len);
 bool send_rgb565_image_to_telegram(const uint8_t *rgb565, uint16_t width, uint16_t height, uint8_t quality, const char *caption);
+bool send_rgb565_image_to_supabase(const uint8_t *rgb565, uint16_t width, uint16_t height, uint8_t quality, const char *caption);
 
 static const char *TAG = "net_sender";
 
@@ -86,6 +87,12 @@ static void net_sender_task(void *arg)
                                                         item.u.tg.quality,
                                                         item.u.tg.caption ? item.u.tg.caption : "");
                 ESP_LOGI(TAG, "Telegram photo sent: %s", ok ? "OK" : "FAIL");
+                bool sb_ok = send_rgb565_image_to_supabase(item.u.tg.rgb565,
+                                                        item.u.tg.width,
+                                                        item.u.tg.height,
+                                                        item.u.tg.quality,
+                                                        item.u.tg.caption ? item.u.tg.caption : "");
+                ESP_LOGI(TAG, "Supabase photo sent: %s", sb_ok ? "OK" : "FAIL");
                 // We must free buffers we own
                 net_item_free(&item);
                 break;

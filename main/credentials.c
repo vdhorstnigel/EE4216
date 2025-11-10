@@ -11,6 +11,12 @@ const char* NUS_password = "";
 const char* Telegram_Bot_Token = "8508403841:AAHozwJTKtDI7qsZwpI2k4GbfD3dntZ3T5U";
 const char* Telegram_Chat_ID = "-1003208366727";
 
+const char* SUPABASE_URL = "https://ljeytidzdxpjsiumsomz.supabase.co";
+const char* SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqZXl0aWR6ZHhwanNpdW1zb216Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3MDQ4NjQsImV4cCI6MjA3ODI4MDg2NH0.FIgYIALEQt8Esz7o6RSwy2Dhb6eRvdmOfgsEF5ezioU";
+const char* SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqZXl0aWR6ZHhwanNpdW1zb216Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjcwNDg2NCwiZXhwIjoyMDc4MjgwODY0fQ.MMCXNXUmOssko9Bs7ZALjq882y_-yUYiiKrxIEyg8x8";
+const char* BUCKET = "camera-images";
+const char* TABLE_NAME = "detection_logs";
+
 
 const char *MQTT_Broker = "mqtts://e29d378a.ala.asia-southeast1.emqxsl.com:8883";
 const char *MQTT_Broker_Username = "ESP32";

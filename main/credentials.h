@@ -11,6 +11,12 @@ extern const char* NUS_password;
 extern const char* Telegram_Bot_Token;
 extern const char* Telegram_Chat_ID;
 
+extern const char* SUPABASE_URL;
+extern const char* SUPABASE_API_KEY;
+extern const char* SUPABASE_SERVICE_KEY;
+extern const char* BUCKET;
+extern const char* TABLE_NAME;
+
 extern const char *MQTT_Broker;
 extern const char *MQTT_Broker_Username;
 extern const char *MQTT_Broker_Password;
