@@ -19,6 +19,9 @@ static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=fr
 static const char *_STREAM_BOUNDARY = "\r\n--frame\r\n";
 static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 
+char*  buf;
+size_t buf_len;
+
 // Context for motion detection frames
 struct MotionCtx {
     uint8_t *rgb565;
@@ -150,6 +153,7 @@ static esp_err_t index_get_handler(httpd_req_t *req) {
 
 
 static esp_err_t motion_get_handler(httpd_req_t *req) {
+    
     // Get latest frame from camera
     ESP_LOGI(TAG, "Motion detected, getting frame");
     camera_fb_t *fb = esp_camera_fb_get();
@@ -184,11 +188,28 @@ static esp_err_t motion_get_handler(httpd_req_t *req) {
 
     // Copy the frame data and return the frame buffer to camera driver so that the camera can continue capturing new frames
     memcpy(copy, fb->buf, rgb565_len);
+
     esp_camera_fb_return(fb);
 
+    // Get timestamp from parameter 
+    char ts_value[64] = {0};
+    size_t qlen = httpd_req_get_url_query_len(req);
+    if (qlen > 0) {
+        char *qbuf = (char *)malloc(qlen + 1);
+        if (qbuf) {
+            if (httpd_req_get_url_query_str(req, qbuf, qlen + 1) == ESP_OK) {
+                char val[sizeof(ts_value)] = {0};
+                if (httpd_query_key_value(qbuf, "ts", val, sizeof(val)) == ESP_OK) {
+                    strncpy(ts_value, val, sizeof(ts_value) - 1);
+                    ESP_LOGI(TAG, "Query ts=%s", ts_value);
+                }
+            }
+            free(qbuf);
+        }
+    }
+
     // send to telegram async sender task so that camera will not be blocked when sending http
-    const char *caption = "Motion Detected";
-    if (!net_send_telegram_rgb565_take(copy, rgb565_len, fb->width, fb->height, 40, caption)) {
+    if (!net_send_telegram_rgb565_take(copy, rgb565_len, fb->width, fb->height, 40, ts_value[0] ? ts_value : 0)) {
         free(copy);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "enqueue failed");
         return ESP_FAIL;

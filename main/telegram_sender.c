@@ -75,12 +75,14 @@ static bool send_jpeg_to_telegram(const uint8_t *jpg, size_t jpg_len, const char
 
     char part3_cap[256];
     int part3_cap_len = 0;
+    char caption_ts[128];
+    snprintf(caption_ts, sizeof(caption_ts), "Motion Detected, Timestamp: %s", caption);
     if (caption && caption[0]) {
         part3_cap_len = snprintf(part3_cap, sizeof(part3_cap),
             "\r\n--%s\r\n"
             "Content-Disposition: form-data; name=\"caption\"\r\n\r\n"
             "%s",
-            boundary, caption);
+            boundary, caption_ts);
     }
 
     char closing[64];
@@ -167,10 +169,8 @@ static bool send_jpeg_to_supabase(const uint8_t *jpg, size_t jpg_len, const char
         return false;
     }
 
-    time(&now);
-    localtime_r(&now, &timeinfo);
     char filename[48];
-    snprintf(filename, sizeof(filename), "Motion_%lld.jpg", now);
+    snprintf(filename, sizeof(filename), "Motion_%s.jpg", caption);
 
     char url[256];
     int n = snprintf(url, sizeof(url), "%s/storage/v1/object/%s/%s", SUPABASE_URL, BUCKET, filename);
