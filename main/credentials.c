@@ -1,7 +1,7 @@
 #include "credentials.h"
 
-const char* ssid = "@horst_onthefloor";
-const char* password =  "Nigel123";
+const char* ssid = "GalaxyZH";
+const char* password =  "shqt4849";
 
 const char* NUS_ssid = "NUS_STU";
 const char* NUS_identity = "";  

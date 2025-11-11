@@ -56,7 +56,7 @@ extern "C" void ntp_sync() {
 
 extern "C" void init(void *pvParameter) {
 
-    wifi_init();
+    static_wifi_init();
     vTaskDelay(pdMS_TO_TICKS(2000)); // wait for wifi to settle
     ntp_sync();
 
