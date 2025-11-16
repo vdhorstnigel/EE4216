@@ -88,8 +88,8 @@ protected:
             bool should_send = false;
             if (!m_stable_sent) {
                 should_send = true; // first send after stable
-            } else if (now_tick - m_last_stable_post_tick >= pdMS_TO_TICKS(5000)) {
-                should_send = true; // periodic resend every 5s while stable
+            } else if (now_tick - m_stable_start_tick >= pdMS_TO_TICKS(5000)) {
+                should_send = true; // periodic resend every 5s
             }
             if (should_send) {
                 // By information logging here, we can check timestamps to ensure the logic is correct
